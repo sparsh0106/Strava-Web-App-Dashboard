@@ -1,4 +1,4 @@
-import type { BikeStat, DailyStat, Dataset, Ride, Streak, YearStat } from "./types";
+import type { BikeStat, DailyStat, Dataset, Ride, Streak, YearStat, DayOfWeekPattern, HourOfDayPattern, MonthlyTrend, SpeedElevationBin, HRZone, ProgressiveMetric, ElevationRatioAnalysis } from "./types";
 
 const FIREFOX = "Firefox Road Runner Pro D";
 
@@ -301,3 +301,264 @@ export function buildDataset(rides: Ride[]): Dataset {
 }
 
 export { parseDate };
+
+// Compute day-of-week riding patterns
+export function computeDayOfWeekPatterns(rides: Ride[]): DayOfWeekPattern[] {
+  const dayData: Map<number, { rides: number; distanceKm: number; speedSum: number }> = new Map();
+
+  rides.forEach(r => {
+    const dayIndex = r.date ? new Date(r.date).getDay() : 0; // 0=Sunday
+    if (!dayData.has(dayIndex)) {
+      dayData.set(dayIndex, { rides: 0, distanceKm: 0, speedSum: 0 });
+    }
+    const d = dayData.get(dayIndex)!;
+    d.rides++;
+    d.distanceKm += r.distance ?? 0;
+    if (r.avgSpeed !== null) d.speedSum += r.avgSpeed;
+  });
+
+  const patterns: DayOfWeekPattern[] = [];
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+  dayData.forEach((d, dayIndex) => {
+    patterns.push({
+      dayIndex,
+      dayName: dayNames[dayIndex],
+      rides: d.rides,
+      distanceKm: d.distanceKm,
+      avgSpeed: d.rides > 0 ? d.speedSum / d.rides : null,
+    });
+  });
+
+  return patterns.sort((a, b) => a.dayIndex - b.dayIndex);
+}
+
+// Compute hour-of-day riding patterns
+export function computeHourOfDayPatterns(rides: Ride[]): HourOfDayPattern[] {
+  const hourData: Map<number, { rides: number; distanceKm: number; speedSum: number }> = new Map();
+
+  rides.forEach(r => {
+    if (!r.date) return;
+    const hour = new Date(r.date).getHours(); // 0-23
+    if (!hourData.has(hour)) {
+      hourData.set(hour, { rides: 0, distanceKm: 0, speedSum: 0 });
+    }
+    const h = hourData.get(hour)!;
+    h.rides++;
+    h.distanceKm += r.distance ?? 0;
+    if (r.avgSpeed !== null) h.speedSum += r.avgSpeed;
+  });
+
+  const patterns: HourOfDayPattern[] = [];
+  for (let h = 0; h < 24; h++) {
+    const hd = hourData.get(h) || { rides: 0, distanceKm: 0, speedSum: 0 };
+    patterns.push({
+      hour: h,
+      rides: hd.rides,
+      distanceKm: hd.distanceKm,
+      avgSpeed: hd.rides > 0 ? hd.speedSum / hd.rides : null,
+    });
+  }
+
+  return patterns;
+}
+
+// Compute monthly seasonal trends
+export function computeMonthlyTrends(rides: Ride[]): MonthlyTrend[] {
+  const monthData: Map<number, { rides: number; distanceKm: number; elevationM: number; speedSum: number; cfSum: number }> = new Map();
+
+  rides.forEach(r => {
+    if (!r.date) return;
+    const month = new Date(r.date).getMonth() + 1; // 1-12
+    if (!monthData.has(month)) {
+      monthData.set(month, { rides: 0, distanceKm: 0, elevationM: 0, speedSum: 0, cfSum: 0 });
+    }
+    const m = monthData.get(month)!;
+    m.rides++;
+    m.distanceKm += r.distance ?? 0;
+    m.elevationM += r.elevation ?? 0;
+    if (r.avgSpeed !== null) m.speedSum += r.avgSpeed;
+    if (r.cfi !== null) m.cfSum += (r.cfi as number);
+  });
+
+  const trends: MonthlyTrend[] = [];
+  const monthNames = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+
+  for (let m = 1; m <= 12; m++) {
+    const md = monthData.get(m) || { rides: 0, distanceKm: 0, elevationM: 0, speedSum: 0, cfSum: 0 };
+    trends.push({
+      month: m,
+      monthName: monthNames[m - 1],
+      rides: md.rides,
+      distanceKm: md.distanceKm,
+      elevationM: md.elevationM,
+      avgSpeed: md.rides > 0 ? md.speedSum / md.rides : null,
+      cfI: md.rides > 0 ? md.cfSum / md.rides : null,
+    });
+  }
+
+  return trends;
+}
+
+// Compute speed-elevation profile bins
+export function computeSpeedElevationBins(rides: Ride[], binCount = 10): SpeedElevationBin[] {
+  // Sort rides by avgSpeed
+  const sorted = [...rides].sort((a, b) => (a.avgSpeed ?? 0) - (b.avgSpeed ?? 0));
+
+  // Calculate speed range
+  const minSpeed = sorted[0]?.avgSpeed ?? 0;
+  const maxSpeed = sorted[sorted.length - 1]?.avgSpeed ?? 0;
+  const speedRange = maxSpeed - minSpeed || 1;
+
+  // Group by speed bins, track elevation
+  const bins: Map<string, { avgSpeed: number; elevationSum: number; count: number }> = new Map();
+
+  for (let i = 0; i < sorted.length; i++) {
+    const r = sorted[i];
+    const binIndex = Math.min(
+      Math.floor((((r.avgSpeed ?? 0) - minSpeed) / speedRange) * binCount),
+      binCount - 1
+    );
+    const key = `${binIndex}`;
+    if (!bins.has(key)) {
+      bins.set(key, { avgSpeed: 0, elevationSum: 0, count: 0 });
+    }
+    const b = bins.get(key)!;
+    b.avgSpeed += r.avgSpeed ?? 0;
+    b.elevationSum += r.elevation ?? 0;
+    b.count++;
+  }
+
+  const results: SpeedElevationBin[] = [];
+  bins.forEach((b, key) => {
+    results.push({
+      avgSpeed: b.count > 0 ? b.avgSpeed / b.count : 0,
+      avgElevation: b.count > 0 ? b.elevationSum / b.count : 0,
+      rideCount: b.count,
+    });
+  });
+
+  return results.sort((a, b) => a.avgSpeed - b.avgSpeed);
+}
+
+// Compute HR zone distribution
+export function computeHRZoneDistribution(rides: Ride[]): HRZone[] {
+  // Define HR zones (typical cycling zones)
+  const zones: HRZone[] = [
+    { min: 0, max: 113, label: "Zone 1 - Recovery", rides: 0, distanceKm: 0, avgCFI: null },
+    { min: 113, max: 130, label: "Zone 2 - Endurance", rides: 0, distanceKm: 0, avgCFI: null },
+    { min: 130, max: 147, label: "Zone 3 - Tempo", rides: 0, distanceKm: 0, avgCFI: null },
+    { min: 147, max: 164, label: "Zone 4 - Threshold", rides: 0, distanceKm: 0, avgCFI: null },
+    { min: 164, max: 200, label: "Zone 5 - VO2 Max", rides: 0, distanceKm: 0, avgCFI: null },
+  ];
+
+  // Track CFI sums per zone using a separate map
+  const zoneCfSums: Map<number, number> = new Map();
+  const zoneCfCounts: Map<number, number> = new Map();
+
+  rides.forEach(r => {
+    if (r.hrMean === null) return;
+
+    // Find which zone this HR falls into
+    for (let i = 0; i < 5; i++) {
+      const zone = zones[i];
+      if (r.hrMean >= zone.min && r.hrMean < zone.max) {
+        zone.rides++;
+        zone.distanceKm += r.distance ?? 0;
+        if (r.cfi !== null) {
+          zoneCfSums.set(i, (zoneCfSums.get(i) ?? 0) + (r.cfi as number));
+          zoneCfCounts.set(i, (zoneCfCounts.get(i) ?? 0) + 1);
+        }
+        break;
+      }
+    }
+  });
+
+  // Calculate average CFI per zone
+  zones.forEach((zone, i) => {
+    const cfSum = zoneCfSums.get(i) ?? 0;
+    const cfCount = zoneCfCounts.get(i) ?? 0;
+    zone.avgCFI = cfCount > 0 ? cfSum / cfCount : null;
+  });
+
+  return zones;
+}
+
+// Compute progressive metrics (moving averages/trends)
+export function computeProgressiveMetrics(rides: Ride[]): ProgressiveMetric[] {
+  // Sort rides by date (already sorted in buildDataset, but ensure)
+  const sorted = [...rides].sort((a, b) => a.date.localeCompare(b.date));
+
+  const metrics: ProgressiveMetric[] = [];
+  let cumDistance = 0;
+  let cumSpeedSum = 0;
+  let cumCFISum = 0;
+  let cumMovingHours = 0;
+  let speedCount = 0;
+  let cfCount = 0;
+
+  sorted.forEach((r, i) => {
+    cumDistance += r.distance ?? 0;
+    if (r.avgSpeed !== null) {
+      cumSpeedSum += r.avgSpeed;
+      speedCount++;
+    }
+    if (r.cfi !== null) {
+      cumCFISum += (r.cfi as number);
+      cfCount++;
+    }
+    if (r.movingHours !== null) {
+      cumMovingHours += r.movingHours;
+    }
+
+    metrics.push({
+      index: i,
+      distanceKm: cumDistance,
+      avgSpeed: speedCount > 0 ? cumSpeedSum / speedCount : null,
+      cfI: cfCount > 0 ? cumCFISum / cfCount : null,
+      movingHours: cumMovingHours,
+    });
+  });
+
+  return metrics;
+}
+
+// Compute elevation-distance ratio analysis
+export function computeElevationRatioAnalysis(rides: Ride[]): ElevationRatioAnalysis {
+  let totalElevation = 0;
+  let totalDistance = 0;
+  let hillCountModerate = 0; // 5-15 m/km
+  let hillCountSteep = 0; // >15 m/km
+  let totalRidesWithElevation = 0;
+
+  rides.forEach(r => {
+    if (r.distance === null || r.distance === 0 || r.elevation === null) return;
+    totalDistance += r.distance;
+    totalElevation += r.elevation;
+    totalRidesWithElevation++;
+
+    const elevationPerKm = (r.elevation / r.distance) * 1000; // m per km
+
+    if (elevationPerKm >= 5 && elevationPerKm <= 15) {
+      hillCountModerate++;
+    } else if (elevationPerKm > 15) {
+      hillCountSteep++;
+    }
+  });
+
+  const avgElevationPerKm = totalRidesWithElevation > 0 ? totalElevation / totalDistance * 1000 : 0;
+  const moderatePct = totalRidesWithElevation > 0 ? (hillCountModerate / totalRidesWithElevation) * 100 : 0;
+  const steepPct = totalRidesWithElevation > 0 ? (hillCountSteep / totalRidesWithElevation) * 100 : 0;
+
+  return {
+    avgElevationPerKm,
+    totalElevationM: totalElevation,
+    totalDistanceKm: totalDistance,
+    hillinessScore: avgElevationPerKm,
+    moderateHillPct: moderatePct,
+    steepHillPct: steepPct,
+  };
+}

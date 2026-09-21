@@ -1,6 +1,7 @@
 import "./styles.css";
 import type { Dataset } from "./types";
 import { connectGoogle, fetchDataset, getAuthStatus, logoutGoogle } from "./sheets";
+import { computeDayOfWeekPatterns, computeHourOfDayPatterns, computeMonthlyTrends, computeSpeedElevationBins, computeHRZoneDistribution, computeProgressiveMetrics, computeElevationRatioAnalysis } from "./analytics";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const tooltip = document.createElement("div");
@@ -10,7 +11,7 @@ document.body.appendChild(tooltip);
 
 type AppState = {
   dataset: Dataset | null;
-  page: "overview" | "calendar" | "performance" | "bikes" | "streaks" | "rides";
+  page: "overview" | "calendar" | "performance" | "bikes" | "streaks" | "day-of-week" | "hour-of-day" | "monthly-trends" | "speed-elevation" | "hr-zones" | "progressive-metrics" | "rides";
   year: number | null;
   loading: boolean;
   connected: boolean;
@@ -51,6 +52,12 @@ function shell(content: string): string {
             ${nav("performance","Performance","CFI + progression")}
             ${nav("bikes","Cycles","Bike analysis")}
             ${nav("streaks","Consistency","3+ day streaks")}
+            ${nav("day-of-week","Day of Week","Riding pattern by day of week")}
+            ${nav("hour-of-day","Hours of Day","Riding pattern by hour of day")}
+            ${nav("monthly-trends","Monthly Trends","Performance by month")}
+            ${nav("speed-elevation","Speed/Elevation","Climbing vs. speed profile")}
+            ${nav("hr-zones","HR Zones","Heart rate intensity distribution")}
+            ${nav("progressive-metrics","Progressive Metrics","Moving averages and trends")}
             ${nav("rides","Ride explorer","Row-level data")}
           </nav>
         </div>
@@ -195,6 +202,36 @@ function streaksView(): string {
   return `<div class="h-full overflow-y-auto scroll-thin"><div class="grid xl:grid-cols-[1.25fr_.75fr] gap-4"><div class="card rounded-2xl p-5"><div class="flex justify-between"><div><div class="font-semibold">All streaks ≥ 3 days</div><div class="text-xs text-slate-500 mt-1">${ss.length} streaks</div></div><div class="text-3xl font-black text-lime-300">${top.days}d</div></div><div class="space-y-2 mt-4">${ss.map((s,i)=>`<div class="rounded-xl border border-white/[.05] bg-white/[.02] p-3 flex items-center gap-3"><div class="w-9 h-9 rounded-xl bg-lime-400/10 text-lime-300 flex items-center justify-center font-black">${i+1}</div><div class="flex-1"><div class="text-sm font-semibold">${s.start} → ${s.end}</div><div class="text-[11px] text-slate-500">${s.rides} rides · ${s.distanceKm.toFixed(1)} km · ${s.elevationM.toFixed(0)} m</div></div><div class="text-right mono">${s.days}d<div class="text-[10px] text-slate-500">${s.avgSpeed.toFixed(1)} km/h</div></div></div>`).join("")}</div></div><div class="card rounded-2xl p-5"><div class="text-[10px] uppercase tracking-[.18em] text-slate-500">Strongest block</div><div class="text-2xl font-black mt-2">${top.start} → ${top.end}</div><div class="text-5xl font-black text-lime-300 mt-4">${top.distanceKm.toFixed(0)} km</div><div class="text-sm text-slate-400 mt-1">${top.days} consecutive days · ${top.rides} rides</div></div></div></div>`;
 }
 
+function dayOfWeekView(): string {
+  const patterns = computeDayOfWeekPatterns(state.dataset!.rides);
+  return `<div class="h-full card rounded-2xl p-5 overflow-y-auto"><div class="flex justify-between items-center mb-4"><div><div class="font-semibold">Riding Patterns by Day</div><div class="text-xs text-slate-500 mt-1">Day-of-week analysis</div></div></div><div class="grid grid-cols-2 gap-2 mt-4">${patterns.map(p=>`<div class="rounded-xl bg-white/[.025] p-3"><div class="text-slate-500 text-xs">${p.dayName}</div><div class="mono font-bold mt-1">${p.rides} rides</div><div class="text-[10px] text-slate-500 mt-1">${p.distanceKm.toFixed(1)} km</div><div class="text-[10px] ${p.avgSpeed !== null ? 'text-cyan-300' : 'text-slate-500'}">${p.avgSpeed !== null ? p.avgSpeed.toFixed(1) : '—'} km/h</div></div>`).join("")}</div></div>`;
+}
+
+function hourOfDayView(): string {
+  const patterns = computeHourOfDayPatterns(state.dataset!.rides);
+  return `<div class="h-full card rounded-2xl p-5 overflow-y-auto"><div class="flex justify-between items-center mb-4"><div><div class="font-semibold">Riding Patterns by Hour</div><div class="text-xs text-slate-500 mt-1">Hour-of-day analysis (24-hour clock)</div></div></div><div class="grid grid-cols-3 gap-2 mt-4">${patterns.map(p=>`<div class="rounded-xl bg-white/[.025] p-2 text-center"><div class="text-slate-500 text-xs">${p.hour}:00</div><div class="mono font-bold mt-2">${p.rides}</div><div class="text-[10px] text-slate-500">${p.distanceKm.toFixed(1)} km</div><div class="text-[10px] ${p.avgSpeed !== null ? 'text-cyan-300' : 'text-slate-500'} mt-1">${p.avgSpeed !== null ? p.avgSpeed.toFixed(1) : '—'} km/h</div></div>`).join("")}</div></div>`;
+}
+
+function monthlyTrendsView(): string {
+  const trends = computeMonthlyTrends(state.dataset!.rides);
+  return `<div class="h-full card rounded-2xl p-5 overflow-y-auto"><div class="flex justify-between items-center mb-4"><div><div class="font-semibold">Monthly Seasonal Trends</div><div class="text-xs text-slate-500 mt-1">Performance by month</div></div></div><div class="grid grid-cols-2 gap-3 mt-4">${trends.map(t=>`<div class="rounded-xl bg-white/[.025] p-3"><div class="text-slate-500 text-xs">${t.monthName}</div><div class="mono font-bold mt-1">${t.rides} rides</div><div class="text-[10px] text-slate-500 mt-1">${t.distanceKm.toFixed(1)} km</div><div class="text-[10px] text-slate-500 mt-1">${t.elevationM.toFixed(0)} m</div><div class="text-[10px] ${t.avgSpeed !== null ? 'text-cyan-300' : 'text-slate-500'} mt-1">${t.avgSpeed !== null ? t.avgSpeed.toFixed(1) : '—'} km/h</div><div class="text-[10px] ${t.cfI !== null ? 'text-violet-300' : 'text-slate-500'} mt-1">${t.cfI !== null ? t.cfI.toFixed(1) : '—'} CFI</div></div>`).join("")}</div></div>`;
+}
+
+function speedElevationView(): string {
+  const bins = computeSpeedElevationBins(state.dataset!.rides);
+  return `<div class="h-full card rounded-2xl p-5 overflow-y-auto"><div class="flex justify-between items-center mb-4"><div><div class="font-semibold">Speed-Elevation Profile</div><div class="text-xs text-slate-500 mt-1">Climbing vs. speed analysis</div></div></div><div class="grid grid-cols-2 gap-3 mt-4">${bins.map(b=>`<div class="rounded-xl bg-white/[.025] p-3"><div class="text-slate-500 text-xs">Speed: ${b.avgSpeed.toFixed(1)} km/h</div><div class="mono font-bold mt-1">${b.avgElevation.toFixed(0)} m elevation</div><div class="text-[10px] text-slate-500 mt-1">${b.rideCount} rides</div></div>`).join("")}</div></div>`;
+}
+
+function hrZoneView(): string {
+  const zones = computeHRZoneDistribution(state.dataset!.rides);
+  return `<div class="h-full card rounded-2xl p-5 overflow-y-auto"><div class="flex justify-between items-center mb-4"><div><div class="font-semibold">HR Zone Distribution</div><div class="text-xs text-slate-500 mt-1">Heart rate intensity analysis</div></div></div><div class="space-y-2 mt-4">${zones.map(z=>`<div class="rounded-xl bg-white/[.025] p-3"><div class="text-slate-500 text-xs">${z.label}</div><div class="mono font-bold mt-1">${z.rides} rides</div><div class="text-[10px] text-slate-500 mt-1">${z.distanceKm.toFixed(1)} km</div><div class="text-[10px] ${z.avgCFI !== null ? 'text-violet-300' : 'text-slate-500'} mt-1">${z.avgCFI !== null ? z.avgCFI.toFixed(1) : '—'} CFI</div></div>`).join("")}</div></div>`;
+}
+
+function progressiveMetricsView(): string {
+  const metrics = computeProgressiveMetrics(state.dataset!.rides);
+  return `<div class="h-full card rounded-2xl p-5 overflow-y-auto"><div class="flex justify-between items-center mb-4"><div><div class="font-semibold">Progressive Metrics / Trend Lines</div><div class="text-xs text-slate-500 mt-1">Moving averages across all rides</div></div></div><div class="grid grid-cols-2 gap-3 mt-4">${metrics.map(m=>`<div class="rounded-xl bg-white/[.025] p-3"><div class="text-slate-500 text-xs">Ride #${m.index + 1}</div><div class="mono font-bold mt-1">${m.distanceKm.toFixed(1)} km</div><div class="text-[10px] ${m.avgSpeed !== null ? 'text-cyan-300' : 'text-slate-500'} mt-1">${m.avgSpeed !== null ? m.avgSpeed.toFixed(1) : '—'} km/h</div><div class="text-[10px] ${m.cfI !== null ? 'text-violet-300' : 'text-slate-500'} mt-1">${m.cfI !== null ? m.cfI.toFixed(1) : '—'} CFI</div><div class="text-[10px] text-slate-500 mt-1">${m.movingHours !== null ? (m.movingHours*60).toFixed(0) + ' min' : '—'} moving</div></div>`).join("")}</div></div>`;
+}
+
 function ridesView(): string {
   const rides = state.dataset!.rides.filter(r=>r.year===state.year).slice().reverse();
   return `<div class="h-full card rounded-2xl p-5 overflow-y-auto scroll-thin"><div class="flex justify-between items-center mb-4"><div><div class="font-semibold">Ride explorer</div><div class="text-xs text-slate-500">${state.year} · ${rides.length} rides</div></div><input id="rideSearch" class="bg-black/20 border border-white/[.08] rounded-lg px-3 py-2 text-xs outline-none" placeholder="Search bike/date"></div><div class="overflow-auto max-h-[70vh]"><table class="w-full text-xs"><thead><tr class="text-left text-slate-500"><th class="p-2">Date</th><th class="p-2">Bike</th><th class="p-2">Distance</th><th class="p-2">Speed</th><th class="p-2">HR</th><th class="p-2">CFI</th></tr></thead><tbody id="rideBody">${rides.map(r=>rideRow(r)).join("")}</tbody></table></div></div>`;
@@ -211,11 +248,18 @@ function renderContent(): string {
   if (state.page==="performance") return performanceView();
   if (state.page==="bikes") return bikesView();
   if (state.page==="streaks") return streaksView();
+  if (state.page==="day-of-week") return dayOfWeekView();
+  if (state.page==="hour-of-day") return hourOfDayView();
+  if (state.page==="monthly-trends") return monthlyTrendsView();
+  if (state.page==="speed-elevation") return speedElevationView();
+  if (state.page==="hr-zones") return hrZoneView();
+  if (state.page==="progressive-metrics") return progressiveMetricsView();
   return ridesView();
 }
 
 function titleForPage(): string {
-  return ({overview:"Strava Overview",calendar:"Ride Calendar",performance:"Performance / CFI",bikes:"Cycle Analysis",streaks:"Consistency",rides:"Ride Explorer"} as const)[state.page];
+  const pages = {overview:"Strava Overview",calendar:"Ride Calendar",performance:"Performance / CFI",bikes:"Cycle Analysis",streaks:"Consistency",dayofweek:"Day of Week",hoursofday:"Hours of Day",monthlytrends:"Monthly Trends",speedelevation:"Speed/Elevation",hrzones:"HR Zones",progressivemetrics:"Progressive Metrics",rides:"Ride Explorer"};
+  return (pages as any)[state.page];
 }
 
 function mountShell(): void {
