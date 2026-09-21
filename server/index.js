@@ -45,6 +45,8 @@ app.get("/api/auth/status", async (req, res) => {
 });
 
 app.get("/auth/google", (req, res) => {
+console.log("OAuth Client ID:", process.env.GOOGLE_CLIENT_ID);
+console.log("OAuth Redirect URI:", process.env.GOOGLE_REDIRECT_URI);
   const url = oauth2.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
