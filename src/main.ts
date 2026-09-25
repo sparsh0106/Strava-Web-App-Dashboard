@@ -689,7 +689,7 @@ function lineChart(
   labels: string[],
   options: { color?: string; valueFormatter?: (value: number) => string; height?: number } = {}
 ): string {
-  const color = options.color ?? "#6ee7f9";
+  const color = options.color ?? "#ff6b57";
   const formatter = options.valueFormatter ?? ((value: number) => fmt.n(value, 1));
   const height = options.height ?? 230;
   const width = 720;
@@ -792,7 +792,7 @@ function overviewView(): string {
       ${kpiCard("Longest ride", longest ? fmt.km(longest.distance) : "—", longest ? fmt.shortDate(longest.date) : "No record", "star", "pink", "rides")}
     </section>
     <section class="content-grid content-grid--main reveal reveal--delay-3">
-      <div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Momentum</div><h2>${metricLabel(state.metric)} trajectory</h2><p>Last ${trendRides.length} rides in ${escapeHtml(scope.toLowerCase())}.</p></div><div class="metric-switcher">${(["cfi", "distance", "speed", "elevation"] as Metric[]).map(metric => `<button class="${state.metric === metric ? "is-active" : ""}" data-metric="${metric}">${metricLabel(metric)}</button>`).join("")}</div></div>${lineChart(values, labels, { color: state.metric === "elevation" ? "#c4f36b" : state.metric === "speed" ? "#a78bfa" : state.metric === "distance" ? "#67e8f9" : "#fbbf6b", valueFormatter: value => state.metric === "cfi" ? value.toFixed(1) : state.metric === "distance" ? `${value.toFixed(1)} km` : state.metric === "speed" ? `${value.toFixed(1)} km/h` : `${value.toFixed(0)} m` })}</div>
+      <div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Momentum</div><h2>${metricLabel(state.metric)} trajectory</h2><p>Last ${trendRides.length} rides in ${escapeHtml(scope.toLowerCase())}.</p></div><div class="metric-switcher">${(["cfi", "distance", "speed", "elevation"] as Metric[]).map(metric => `<button class="${state.metric === metric ? "is-active" : ""}" data-metric="${metric}">${metricLabel(metric)}</button>`).join("")}</div></div>${lineChart(values, labels, { color: state.metric === "elevation" ? "#ffc266" : state.metric === "speed" ? "#d87b95" : state.metric === "distance" ? "#ff6b57" : "#ff9a62", valueFormatter: value => state.metric === "cfi" ? value.toFixed(1) : state.metric === "distance" ? `${value.toFixed(1)} km` : state.metric === "speed" ? `${value.toFixed(1)} km/h` : `${value.toFixed(0)} m` })}</div>
       <div class="panel panel--pulse"><div class="panel-heading"><div><div class="eyebrow">Consistency</div><h2>Seasonal rhythm</h2><p>Distance by month</p></div><button class="text-button" data-page-target="monthly-trends">Full view ${icon("arrow", 14)}</button></div><div class="mini-bars">${monthly.map(month => `<div class="mini-bar" data-tooltip="${escapeHtml(`${month.monthName} · ${fmt.km(month.distanceKm)}`)}"><i style="height:${Math.max(month.distanceKm ? 5 : 0, (month.distanceKm / maxMonthly) * 100)}%"></i><span>${month.monthName.slice(0, 3)}</span></div>`).join("")}</div><div class="pulse-summary"><div><span>Active days</span><strong>${fmt.n(activeDays)}</strong></div><div><span>Latest streak</span><strong>${streak} days</strong></div><div><span>Busiest month</span><strong>${escapeHtml(monthly.find(month => month.distanceKm === Math.max(...monthly.map(item => item.distanceKm)))?.monthName ?? "—")}</strong></div></div></div>
     </section>
     <section class="content-grid content-grid--lower reveal reveal--delay-4">
@@ -908,7 +908,7 @@ function monthlyTrendsView(): string {
   const trends = computeMonthlyTrends(getScopedRides());
   return `<div class="page-stack">
     ${pageHeader(`${scopeLabel()} · seasonal view`, "The shape of your season", "Compare how distance, elevation, speed, and CFI move through the year.", `<button class="button button--secondary" data-page-target="calendar">See activity map ${icon("arrow", 15)}</button>`)}
-    <section class="content-grid content-grid--main reveal reveal--delay-1"><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Distance trajectory</div><h2>Monthly volume</h2><p>Distance accumulated in each calendar month</p></div></div>${lineChart(trends.map(trend => trend.distanceKm), trends.map(trend => trend.monthName.slice(0, 3)), { color: "#67e8f9", valueFormatter: value => fmt.km(value) })}</div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Month cards</div><h2>Seasonal detail</h2></div></div><div class="month-card-grid">${trends.map(trend => `<div class="month-card ${trend.rides ? "has-data" : ""}"><strong>${escapeHtml(trend.monthName.slice(0, 3))}</strong><span>${fmt.n(trend.rides)} rides</span><b>${fmt.km(trend.distanceKm)}</b><small>${fmt.m(trend.elevationM)} · ${trend.cfI === null ? "CFI —" : `CFI ${trend.cfI.toFixed(1)}`}</small></div>`).join("")}</div></div></section>
+    <section class="content-grid content-grid--main reveal reveal--delay-1"><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Distance trajectory</div><h2>Monthly volume</h2><p>Distance accumulated in each calendar month</p></div></div>${lineChart(trends.map(trend => trend.distanceKm), trends.map(trend => trend.monthName.slice(0, 3)), { color: "#ff6b57", valueFormatter: value => fmt.km(value) })}</div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Month cards</div><h2>Seasonal detail</h2></div></div><div class="month-card-grid">${trends.map(trend => `<div class="month-card ${trend.rides ? "has-data" : ""}"><strong>${escapeHtml(trend.monthName.slice(0, 3))}</strong><span>${fmt.n(trend.rides)} rides</span><b>${fmt.km(trend.distanceKm)}</b><small>${fmt.m(trend.elevationM)} · ${trend.cfI === null ? "CFI —" : `CFI ${trend.cfI.toFixed(1)}`}</small></div>`).join("")}</div></div></section>
   </div>`;
 }
 
@@ -939,7 +939,7 @@ function progressiveMetricsView(): string {
   return `<div class="page-stack">
     ${pageHeader(`${scopeLabel()} · rolling ten-ride window`, "The long view", "Cumulative distance with a rolling ten-ride average for a less noisy read on progress.", `<button class="button button--secondary" data-page-target="performance">Back to CFI ${icon("arrow", 15)}</button>`)}
     <section class="kpi-grid kpi-grid--three reveal reveal--delay-1">${kpiCard("Rolling speed", latest?.avgSpeed === null || latest === undefined ? "—" : fmt.speed(latest.avgSpeed), "last 10 rides", "performance", "cyan")}${kpiCard("Rolling CFI", latest?.cfI === null || latest === undefined ? "—" : fmt.cfi(latest.cfI), "last 10 rides", "spark", "violet")}${kpiCard("Cumulative distance", latest ? fmt.km(latest.distanceKm) : "—", `${fmt.n(rides.length)} rides`, "overview", "lime")}</section>
-    <section class="panel panel--chart reveal reveal--delay-2"><div class="panel-heading"><div><div class="eyebrow">Rolling average</div><h2>Progression over time</h2><p>Each point uses the current ride and up to nine previous rides.</p></div></div>${metrics.length > 1 ? lineChart(metrics.map(metric => metric.cfI), metrics.map(metric => `Ride ${metric.index + 1}`), { color: "#a78bfa", valueFormatter: value => value.toFixed(1), height: 270 }) : '<div class="chart-empty">Add at least two rides to see a rolling trend.</div>'}</section>
+    <section class="panel panel--chart reveal reveal--delay-2"><div class="panel-heading"><div><div class="eyebrow">Rolling average</div><h2>Progression over time</h2><p>Each point uses the current ride and up to nine previous rides.</p></div></div>${metrics.length > 1 ? lineChart(metrics.map(metric => metric.cfI), metrics.map(metric => `Ride ${metric.index + 1}`), { color: "#d87b95", valueFormatter: value => value.toFixed(1), height: 270 }) : '<div class="chart-empty">Add at least two rides to see a rolling trend.</div>'}</section>
   </div>`;
 }
 
@@ -1391,7 +1391,7 @@ async function initWebGPU(): Promise<void> {
         let uv = f.xy / p.res
         let q = (uv - .5) * vec2f(p.res.x / max(p.res.y, 1.), 1.) * 2.
         let m = (p.mouse - .5) * vec2f(p.res.x / max(p.res.y, 1.), 1.) * 2.
-        var c = vec3f(.004, .009, .016)
+        var c = vec3f(.012, .003, .005)
         for (var i: u32 = 0u; i < 28u; i++) {
           let fi = f32(i)
           let a = fi * .57 + p.time * (.035 + fi * .002)
@@ -1399,7 +1399,7 @@ async function initWebGPU(): Promise<void> {
           var pos = vec2f(cos(a), sin(a)) * r
           pos += (m - pos) * exp(-length(q - m) * 2.) * .12
           let g = exp(-length(q - pos) * 72.)
-          c += g * mix(vec3f(.18, .62, 1.), vec3f(.58, .25, 1.), fract(fi * .19))
+          c += g * mix(vec3f(1., .2, .1), vec3f(.8, .06, .2), fract(fi * .19))
         }
         return vec4f(c, 1.)
       }
