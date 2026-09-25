@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"vite\" \"node server/index.js\"",
-    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && vite build",
+    "check": "npm run typecheck && vite build",
     "preview": "vite preview",
-    "start": "NODE_ENV=production node server/index.js"
+    "start": "node -e \"process.env.NODE_ENV='production'; import('./server/index.js')\""
   },
   "dependencies": {
     "dotenv": "^17.2.2",

@@ -1,5 +1,10 @@
 export type Ride = {
+  /** Stable row key for favorites and detail views. */
+  id: string;
+  /** ISO calendar date, normalized from the Sheet. */
   date: string;
+  /** Optional local clock time when the source row contains one. */
+  startTime: string | null;
   elapsedTime: string;
   movingTime: string;
   distance: number | null;
@@ -61,7 +66,6 @@ export type Streak = {
   avgSpeed: number;
 };
 
-// Day-of-week riding pattern (0=Sunday, 1=Monday, ..., 6=Saturday)
 export type DayOfWeekPattern = {
   dayIndex: number;
   dayName: string;
@@ -70,7 +74,6 @@ export type DayOfWeekPattern = {
   avgSpeed: number | null;
 };
 
-// Hour-of-day riding pattern (0-23)
 export type HourOfDayPattern = {
   hour: number;
   rides: number;
@@ -78,9 +81,8 @@ export type HourOfDayPattern = {
   avgSpeed: number | null;
 };
 
-// Monthly seasonal trend
 export type MonthlyTrend = {
-  month: number; // 1-12
+  month: number;
   monthName: string;
   rides: number;
   distanceKm: number;
@@ -89,14 +91,12 @@ export type MonthlyTrend = {
   cfI: number | null;
 };
 
-// Speed-elevation profile bin
 export type SpeedElevationBin = {
   avgSpeed: number;
   avgElevation: number;
   rideCount: number;
 };
 
-// HR zone distribution
 export type HRZone = {
   min: number;
   max: number;
@@ -106,23 +106,34 @@ export type HRZone = {
   avgCFI: number | null;
 };
 
-// Progressive metric snapshot
 export type ProgressiveMetric = {
-  index: number; // ride index
+  index: number;
   distanceKm: number;
   avgSpeed: number | null;
   cfI: number | null;
   movingHours: number | null;
 };
 
-// Elevation-distance ratio analysis
 export type ElevationRatioAnalysis = {
   avgElevationPerKm: number;
   totalElevationM: number;
   totalDistanceKm: number;
-  hillinessScore: number; // elevation gain per km
-  moderateHillPct: number; // % rides with 5-15 m/km
-  steepHillPct: number; // % rides with >15 m/km
+  hillinessScore: number;
+  moderateHillPct: number;
+  steepHillPct: number;
+};
+
+export type DataQuality = {
+  totalRides: number;
+  completeRides: number;
+  missing: {
+    distance: number;
+    elevation: number;
+    avgSpeed: number;
+    hrMean: number;
+    movingTime: number;
+    startTime: number;
+  };
 };
 
 export type Dataset = {
@@ -132,11 +143,13 @@ export type Dataset = {
   bikes: BikeStat[];
   streaks: Streak[];
   years: number[];
+  dataQuality: DataQuality;
   meta: {
     rides: number;
     ridingDays: number;
     distanceKm: number;
     elevationM: number;
+    movingTimeH: number;
     longestRideKm: number;
     fastestAvgSpeed: number;
     weightedSpeed: number;
