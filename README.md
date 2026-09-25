@@ -26,6 +26,18 @@ RideScope currently includes:
 
 The application is intentionally dependency-light: the charts and interaction layer use browser-native SVG, CSS, and DOM APIs.
 
+## Visual system
+
+RideScope uses an **ember-red** visual language: oxblood and near-black surfaces, vermilion primary actions, coral highlights, warm gold secondary metrics, and rose-toned data accents. Red is reserved for emphasis and navigation rather than filling every surface, which keeps dense cycling data readable.
+
+The interface loads three complementary typefaces from Google Fonts:
+
+- **Space Grotesk** for display headings, navigation, and large metrics
+- **Manrope** for body copy, controls, and readable dashboard content
+- **DM Mono** for dates, measurements, CFI values, and technical labels
+
+The CSS includes system fallbacks for all three families, so the dashboard remains usable if font loading is delayed or unavailable.
+
 ---
 
 ## Architecture
