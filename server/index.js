@@ -222,24 +222,25 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, sheetConfigured: Boolean(SHEET_ID) });
 });
 
-// Vercel serves the Vite output through its CDN; local production still serves
-// the frontend from this Express process.
+// Vercel's Express function serves the Vite output alongside the API. Include
+// public/** in the function bundle through vercel.json so these files exist at
+// runtime; local production uses the same paths.
+app.use(express.static(path.join(ROOT, "public")));
+
+app.use((req, res, next) => {
+  if (req.method !== "GET") return next();
+  if (
+    req.path.startsWith("/api/") ||
+    req.path.startsWith("/auth/") ||
+    req.path === "/oauth2callback" ||
+    req.path === "/logout"
+  ) {
+    return next();
+  }
+  return res.sendFile(path.join(ROOT, "public", "index.html"));
+});
+
 if (!process.env.VERCEL) {
-  app.use(express.static(path.join(ROOT, "public")));
-
-  app.use((req, res, next) => {
-    if (req.method !== "GET") return next();
-    if (
-      req.path.startsWith("/api/") ||
-      req.path.startsWith("/auth/") ||
-      req.path === "/oauth2callback" ||
-      req.path === "/logout"
-    ) {
-      return next();
-    }
-    return res.sendFile(path.join(ROOT, "public", "index.html"));
-  });
-
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`RideScope server listening on port ${PORT}`);
   });
