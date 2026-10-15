@@ -172,7 +172,7 @@ The production Express server serves both `public/` and the API from one origin.
 
 ### Deploying to Vercel
 
-Import the GitHub repository in Vercel and select the `feature/ember-red-ui` branch for the first deployment. The included `vercel.json` selects the Express runtime and runs the production Vite build.
+The `sparsh_rides` Vercel project uses `feature/ember-red-ui` as its Production Branch. The included `vercel.json` selects the Express runtime and runs the production Vite build.
 
 Set these environment variables in the Vercel project for the deployment environments you use:
 
