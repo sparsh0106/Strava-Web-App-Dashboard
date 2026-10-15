@@ -28,14 +28,11 @@ The application is intentionally dependency-light: the charts and interaction la
 
 ## Visual system
 
-RideScope uses a **light vermilion** visual language: warm white surfaces, charcoal text, and confident red accents inspired by Strava’s activity dashboard. Layouts reflow for phone screens, with touch-sized controls and scrollable data tables.
+RideScope uses a vermilion visual language in both light and dark themes. Light mode uses warm white surfaces and charcoal text; dark mode uses deep charcoal surfaces and lighter text. A theme toggle in the top bar switches modes, and the selected theme is saved in this browser. Layouts reflow for phone screens, with touch-sized controls and scrollable data tables.
 
-The interface uses a familiar Google-style type system from Google Fonts:
+The interface uses Google Sans from Google Fonts throughout, with system sans-serif fallbacks if the font cannot load.
 
-- **Roboto** for headings, navigation, metrics, and body copy
-- **Roboto Mono** for compact measurements and chart labels
-
-The CSS includes system fallbacks for both families, so the dashboard remains usable if font loading is delayed or unavailable.
+Compact numerical labels use tabular numerals to keep measurements aligned.
 
 ---
 
@@ -239,6 +236,7 @@ The following preferences are stored in `localStorage` and never leave the brows
 
 - Favorite ride IDs
 - Personal goal targets
+- Light or dark theme preference
 
 The current page is represented in the URL hash, so browser Back/Forward navigation works between dashboard views.
 

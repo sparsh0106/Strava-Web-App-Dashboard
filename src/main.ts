@@ -44,6 +44,7 @@ type Page =
   | "goals";
 
 type Scope = "year" | "all";
+type Theme = "light" | "dark";
 type SortKey = "date" | "distance" | "speed" | "elevation" | "hr";
 type ToastKind = "success" | "info" | "error";
 
@@ -72,6 +73,7 @@ type AppState = {
   selectedDate: string | null;
   favorites: Set<string>;
   goals: GoalValues;
+  theme: Theme;
   menuOpen: boolean;
   toast: { message: string; kind: ToastKind } | null;
 };
@@ -211,12 +213,14 @@ const ICON_PATHS: Record<string, string> = {
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   moon: '<path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/>',
   database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/>'
 };
 
 const STORAGE_KEYS = {
   favorites: "ridescope-favorites",
-  goals: "ridescope-goals"
+  goals: "ridescope-goals",
+  theme: "ridescope-theme"
 };
 
 const defaultGoals: GoalValues = { distanceKm: 500, rides: 30, elevationM: 5000 };
@@ -244,6 +248,21 @@ function readFavorites(): Set<string> {
   } catch {
     return new Set();
   }
+}
+
+function readTheme(): Theme {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.theme);
+    return saved === "dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
+
+function applyTheme(theme: Theme): void {
+  document.documentElement.dataset.theme = theme;
+  const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (themeColor) themeColor.content = theme === "dark" ? "#111820" : "#f6f3f0";
 }
 
 function pageFromHash(): Page {
@@ -276,6 +295,7 @@ const state: AppState = {
   selectedDate: dateFromHash(),
   favorites: readFavorites(),
   goals: readStoredGoals(),
+  theme: readTheme(),
   menuOpen: false,
   toast: null
 };
@@ -579,12 +599,14 @@ function renderRail(): string {
 
 function renderTopbar(): string {
   const meta = PAGE_META[state.page];
+  const nextTheme = state.theme === "light" ? "dark" : "light";
   return `<header class="topbar">
     <button class="icon-button mobile-menu" data-action="menu" aria-label="Open navigation">${icon("menu", 20)}</button>
     <div class="topbar-title"><div class="breadcrumb"><span>Workspace</span>${icon("chevron", 12)}<span>${escapeHtml(meta.label)}</span></div><h1>${escapeHtml(meta.title)}</h1></div>
     <div class="topbar-actions">
       ${state.dataset && state.dataset.years.length ? `<div class="scope-toggle" role="group" aria-label="Data scope"><button class="${state.scope === "year" ? "is-active" : ""}" data-scope="year">Year</button><button class="${state.scope === "all" ? "is-active" : ""}" data-scope="all">All time</button></div>${scopeYearOptions()}` : ""}
       ${state.dataset ? `<button class="button button--sync ${state.syncing ? "is-syncing" : ""}" data-action="sync" ${state.syncing ? "disabled" : ""}>${icon("sync", 15)}<span>${state.syncing ? "Syncing" : "Sync"}</span></button>` : ""}
+      <button class="icon-button theme-toggle" data-action="toggle-theme" aria-label="Switch to ${nextTheme} theme" title="Switch to ${nextTheme} theme">${icon(nextTheme === "dark" ? "moon" : "sun", 17)}</button>
       <div class="topbar-avatar" aria-label="Connected profile">RS</div>
     </div>
   </header>`;
@@ -1210,6 +1232,15 @@ function handleClick(event: MouseEvent): void {
   if (action === "menu") {
     state.menuOpen = true;
     mountShell();
+  } else if (action === "toggle-theme") {
+    state.theme = state.theme === "light" ? "dark" : "light";
+    applyTheme(state.theme);
+    try {
+      localStorage.setItem(STORAGE_KEYS.theme, state.theme);
+    } catch {
+      // The theme still applies for this page when browser storage is unavailable.
+    }
+    mountShell();
   } else if (action === "close-menu") {
     state.menuOpen = false;
     mountShell();
@@ -1324,5 +1355,6 @@ document.addEventListener("keydown", handleKeydown);
 window.addEventListener("popstate", handlePopState);
 window.addEventListener("hashchange", handlePopState);
 
+applyTheme(state.theme);
 mountShell();
 void loadData();

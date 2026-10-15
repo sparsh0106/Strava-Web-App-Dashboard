@@ -14,7 +14,7 @@ RideScope is a private cycling dashboard. It reads a Strava activity export from
 - `src/main.ts` owns hash navigation, dashboard state, view rendering, charts, favorites, ride details, and CSV export.
 - `src/types.ts` defines the shared ride and analytics types.
 - `src/styles.css` contains the visual system, component styling, responsive layouts, and motion preferences.
-- `index.html` loads the app and Roboto / Roboto Mono from Google Fonts.
+- `index.html` loads the app and Google Sans from Google Fonts.
 
 ## Sheet columns
 
@@ -33,7 +33,7 @@ The default source is columns `A:K`: date/time, elapsed time, moving time, dista
 
 ## Visual and interaction direction
 
-Use a light warm-white surface with charcoal text and a vermilion red accent. Roboto is the main typeface and Roboto Mono is reserved for compact numerical labels. Layouts should reflow for phones, preserve keyboard focus states, and respect reduced-motion settings. Keep cycling performance views centered on the recorded activity metrics and distance summaries.
+Use a warm light surface or a charcoal dark surface with a vermilion red accent. Google Sans is used throughout, including compact numerical labels. The light/dark theme toggle persists the user's choice in browser `localStorage`; light is the default. Layouts should reflow for phones, preserve keyboard focus states, and respect reduced-motion settings. Keep cycling performance views centered on the recorded activity metrics and distance summaries.
 
 Favorites and personal goals stay in browser `localStorage`. Never commit `.env` or credentials. The Vite client proxies API routes to the Express server during development.
 
