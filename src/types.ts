@@ -18,7 +18,6 @@ export type Ride = {
   year: number;
   month: number;
   movingHours: number | null;
-  cfi?: number | null;
 };
 
 export type DailyStat = {
@@ -28,7 +27,6 @@ export type DailyStat = {
   elevationM: number;
   avgSpeed: number | null;
   avgHr: number | null;
-  cfi: number | null;
 };
 
 export type YearStat = {
@@ -40,7 +38,6 @@ export type YearStat = {
   weightedSpeed: number;
   movingTimeH: number;
   avgHr: number | null;
-  cfi: number;
   longestRideKm: number;
 };
 
@@ -48,11 +45,11 @@ export type BikeStat = {
   bike: string;
   rides: number;
   distanceKm: number;
+  averageDistanceKm: number;
   avgSpeed: number;
   weightedSpeed: number;
   elevationM: number;
   avgHr: number | null;
-  cfi: number;
   longestRideKm: number;
 };
 
@@ -88,7 +85,6 @@ export type MonthlyTrend = {
   distanceKm: number;
   elevationM: number;
   avgSpeed: number | null;
-  cfI: number | null;
 };
 
 export type SpeedElevationBin = {
@@ -103,14 +99,12 @@ export type HRZone = {
   label: string;
   rides: number;
   distanceKm: number;
-  avgCFI: number | null;
 };
 
 export type ProgressiveMetric = {
   index: number;
   distanceKm: number;
   avgSpeed: number | null;
-  cfI: number | null;
   movingHours: number | null;
 };
 
@@ -125,7 +119,7 @@ export type ElevationRatioAnalysis = {
 
 export type DataQuality = {
   totalRides: number;
-  completeRides: number;
+  ridesWithDistance: number;
   missing: {
     distance: number;
     elevation: number;
@@ -153,6 +147,21 @@ export type Dataset = {
     longestRideKm: number;
     fastestAvgSpeed: number;
     weightedSpeed: number;
-    cfi: number;
   };
+};
+
+export type DistanceSummary = {
+  meanKm: number | null;
+  medianKm: number | null;
+  modeKm: number | null;
+  weeklyAverageKm: number | null;
+  monthlyAverageKm: number | null;
+  rolling7DayDailyAverageKm: number;
+};
+
+export type WeeklyDistance = {
+  weekStart: string;
+  label: string;
+  distanceKm: number;
+  rides: number;
 };

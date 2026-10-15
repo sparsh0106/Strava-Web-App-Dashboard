@@ -1,30 +1,30 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #120b0e;
-  --bg-soft: #1b1013;
-  --panel: rgba(40, 20, 24, 0.78);
-  --panel-strong: rgba(48, 22, 27, 0.94);
-  --panel-soft: rgba(255, 244, 236, 0.045);
-  --line: rgba(255, 205, 190, 0.13);
-  --line-strong: rgba(255, 184, 164, 0.24);
-  --text: #fff1e9;
-  --muted: #b49b98;
-  --muted-strong: #e0c5bd;
-  --cyan: #ff6b57;
-  --cyan-soft: rgba(255, 107, 87, 0.15);
-  --lime: #ffc266;
-  --lime-soft: rgba(255, 194, 102, 0.14);
-  --violet: #d87b95;
-  --violet-soft: rgba(216, 123, 149, 0.14);
-  --orange: #ff9a62;
-  --orange-soft: rgba(255, 154, 98, 0.14);
-  --pink: #ff9caf;
-  --wine: #7f3045;
-  --font-display: "Space Grotesk", "Trebuchet MS", sans-serif;
-  --font-body: "Manrope", "Segoe UI", sans-serif;
-  --font-mono: "DM Mono", "SFMono-Regular", Consolas, monospace;
-  --shadow: 0 28px 90px rgba(22, 4, 8, 0.42);
+  --bg: #f6f3f0;
+  --bg-soft: #eee8e3;
+  --panel: rgba(255, 255, 255, 0.88);
+  --panel-strong: #fff;
+  --panel-soft: rgba(71, 38, 34, 0.035);
+  --line: rgba(70, 39, 35, 0.11);
+  --line-strong: rgba(70, 39, 35, 0.2);
+  --text: #28201d;
+  --muted: #796e6a;
+  --muted-strong: #4a3c38;
+  --cyan: #d83f31;
+  --cyan-soft: rgba(216, 63, 49, 0.1);
+  --lime: #bc693e;
+  --lime-soft: rgba(188, 105, 62, 0.1);
+  --violet: #8f3a4b;
+  --violet-soft: rgba(143, 58, 75, 0.1);
+  --orange: #e96545;
+  --orange-soft: rgba(233, 101, 69, 0.1);
+  --pink: #c84a5b;
+  --wine: #772b32;
+  --font-display: "Roboto", Arial, sans-serif;
+  --font-body: "Roboto", Arial, sans-serif;
+  --font-mono: "Roboto Mono", Consolas, monospace;
+  --shadow: 0 18px 48px rgba(74, 43, 37, 0.08);
   --radius: 20px;
   --ease: cubic-bezier(0.2, 0.75, 0.25, 1);
 }
@@ -37,9 +37,8 @@ body {
   margin: 0;
   overflow-x: hidden;
   background:
-    radial-gradient(circle at 78% -12%, rgba(206, 54, 43, 0.2), transparent 32rem),
-    radial-gradient(circle at 3% 42%, rgba(121, 35, 61, 0.2), transparent 34rem),
-    linear-gradient(145deg, #10090c 0%, #1a0e12 48%, #120a0d 100%);
+    radial-gradient(circle at 84% -15%, rgba(216, 63, 49, 0.1), transparent 34rem),
+    linear-gradient(135deg, #faf8f6 0%, #f4f0ec 52%, #f8f5f2 100%);
   color: var(--text);
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
@@ -73,7 +72,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
   font-family: var(--font-display);
   letter-spacing: -0.045em;
 }
-.mono, .ride-metric strong, .ride-cfi, .data-table td, .chart-label, .bar-value, .record-row > span:last-child, .source-row strong, .runtime-row strong {
+.mono, .ride-metric strong, .ride-save, .data-table td, .chart-label, .bar-value, .record-row > span:last-child, .source-row strong {
   font-family: var(--font-mono);
 }
 
@@ -96,18 +95,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
   min-height: 100vh;
   isolation: isolate;
 }
-.ambient, .ambient-grid { position: fixed; inset: 0; pointer-events: none; z-index: -2; }
-.ambient { filter: blur(30px); opacity: 0.5; }
-.ambient--one { top: -14rem; right: 14%; width: 32rem; height: 32rem; background: radial-gradient(circle, rgba(206, 54, 43, 0.2), transparent 68%); }
-.ambient--two { bottom: -18rem; left: 18%; width: 38rem; height: 38rem; background: radial-gradient(circle, rgba(116, 34, 58, 0.22), transparent 70%); }
-.ambient-grid {
-  z-index: -1;
-  opacity: 0.18;
-  background-image: linear-gradient(rgba(255, 191, 177, 0.055) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 191, 177, 0.055) 1px, transparent 1px);
-  background-size: 48px 48px;
-  mask-image: linear-gradient(to bottom, black 0%, transparent 75%);
-}
-.webgpu-canvas { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -3; pointer-events: none; opacity: 0.34; }
 
 /* Shared controls */
 .icon { display: block; flex: 0 0 auto; }
@@ -351,9 +338,6 @@ button.kpi-card { cursor: pointer; }
 .kpi-card:hover .kpi-arrow { color: var(--kpi-color, var(--cyan)); transform: translateX(3px); }
 
 /* Charts */
-.metric-switcher { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 11px; background: rgba(255, 255, 255, 0.025); }
-.metric-switcher button { min-height: 25px; padding: 0 8px; border: 0; border-radius: 7px; color: #9a766e; background: transparent; font-size: 9px; font-weight: 800; cursor: pointer; transition: color 180ms ease, background 180ms ease; }
-.metric-switcher button.is-active { color: var(--text); background: rgba(255, 107, 87, 0.13); }
 .chart-wrap { width: 100%; min-height: 190px; margin-top: 19px; }
 .chart-wrap--270 { min-height: 235px; }
 .line-chart { display: block; width: 100%; height: 230px; overflow: visible; }
@@ -398,14 +382,14 @@ button.kpi-card { cursor: pointer; }
 .ride-date small, .ride-metric small { overflow: hidden; color: #98756d; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .ride-metric strong { color: #e8c9bd; font-family: var(--font-mono); font-size: 10px; font-weight: 600; }
 .ride-metric--speed strong { color: var(--cyan); }
-.ride-cfi { display: flex; align-items: center; justify-content: flex-end; gap: 3px; color: var(--violet); font-family: var(--font-mono); font-size: 11px; font-weight: 750; }
-.ride-cfi.is-favorite { color: var(--orange); }
+.ride-save { display: flex; align-items: center; justify-content: flex-end; gap: 3px; color: var(--violet); font-family: var(--font-mono); font-size: 11px; font-weight: 750; }
+.ride-save.is-favorite { color: var(--orange); }
 .ride-row > .icon { color: #805e59; transition: color 180ms ease, transform 180ms ease; }
 .ride-row:hover > .icon { color: var(--cyan); transform: translateX(2px); }
 .ride-row--compact { grid-template-columns: minmax(125px, 1.2fr) minmax(80px, 0.8fr) minmax(80px, 0.9fr) 45px 15px; }
 .ride-list--drawer { margin-top: 17px; }
 .ride-list--drawer .ride-row { grid-template-columns: minmax(100px, 1fr) 80px 15px; }
-.ride-list--drawer .ride-metric--speed, .ride-list--drawer .ride-cfi { display: none; }
+.ride-list--drawer .ride-metric--speed, .ride-list--drawer .ride-save { display: none; }
 .record-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .record-list--large { margin-top: 7px; }
 .record-row { display: flex; align-items: center; gap: 10px; min-height: 57px; padding: 8px 9px; border: 1px solid transparent; border-radius: 13px; background: rgba(255, 255, 255, 0.025); }
@@ -634,8 +618,6 @@ button.kpi-card { cursor: pointer; }
 .rail-action span { flex: 1; }
 .rail-action:hover { padding: 0 6px; color: var(--text); }
 .rail-action .icon:last-child { color: #805e59; }
-.runtime-row { display: flex; align-items: center; gap: 7px; min-height: 27px; color: #a47d74; font-size: 9px; }
-.runtime-row strong { margin-left: auto; color: #d9b9ae; font-family: var(--font-mono); font-size: 8px; font-weight: 600; }
 .runtime-dot { width: 5px; height: 5px; border-radius: 50%; }.runtime-dot--cyan { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }.runtime-dot--violet { background: var(--violet); box-shadow: 0 0 8px var(--violet); }
 .rail-card--runtime p { margin-top: 12px; color: #886660; font-size: 9px; }
 .rail-tip { display: flex; align-items: flex-start; gap: 9px; padding: 13px 4px; color: #a47d74; }
@@ -740,8 +722,7 @@ button.kpi-card { cursor: pointer; }
   .hero-card { min-height: 330px; }.hero-copy { padding: 25px 22px; }.hero-visual { position: absolute; right: -38px; bottom: -39px; width: 220px; min-width: 0; height: 220px; opacity: 0.68; }.hero-copy h2 { max-width: 75%; font-size: 34px; }.hero-copy p { max-width: 76%; }
   .kpi-grid, .kpi-grid--three { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }.kpi-card { min-height: 126px; padding: 14px; }.kpi-value { font-size: 23px; }
   .panel--chart, .panel--pulse, .panel, .calendar-panel, .day-detail { padding: 17px; }
-  .panel-heading { display: block; }.panel-heading .metric-switcher, .panel-heading .text-button { justify-content: flex-start; margin-top: 14px; }
-  .metric-switcher { width: fit-content; }
+  .panel-heading { display: block; }.panel-heading .text-button { justify-content: flex-start; margin-top: 14px; }
   .mini-bars { gap: 4px; }.pulse-summary { gap: 5px; }.pulse-summary span { font-size: 8px; }.pulse-summary strong { font-size: 11px; }
   .ride-row, .ride-row--compact { grid-template-columns: minmax(100px, 1.2fr) minmax(72px, 0.8fr) 42px 14px; gap: 7px; }.ride-row .ride-metric--speed { display: none; }
   .calendar-toolbar { flex-wrap: wrap; gap: 14px; }.calendar-stat { padding-left: 12px; }.calendar-months { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 10px; }
@@ -759,4 +740,163 @@ button.kpi-card { cursor: pointer; }
   .calendar-months { grid-template-columns: 1fr; }.month-block { max-width: 330px; }
   .pattern-grid { grid-template-columns: 1fr 1fr; }.month-card-grid { grid-template-columns: 1fr 1fr; }
   .drawer-grid { gap: 6px; }.drawer-grid > div { padding: 10px; }
+}
+
+/* Light vermilion dashboard refresh */
+body { color: var(--text); }
+.app-shell { background: transparent; }
+.sidebar { border-color: var(--line); background: rgba(255, 255, 255, 0.94); box-shadow: 8px 0 30px rgba(74, 43, 37, 0.035); }
+.brand-mark { border-color: rgba(216, 63, 49, 0.18); color: #fff; background: linear-gradient(145deg, #ef6848, #c52e2a); box-shadow: 0 8px 20px rgba(184, 43, 37, 0.2); }
+.brand-name { letter-spacing: 0.08em; }
+.nav-group-label, .brand-subtitle { color: #9a8e89; }
+.nav-item { color: #625551; }
+.nav-item:hover { background: #f7f3f0; }
+.nav-item.is-active { border-color: rgba(216, 63, 49, 0.12); background: linear-gradient(90deg, rgba(216, 63, 49, 0.1), rgba(216, 63, 49, 0.025)); box-shadow: none; }
+.nav-icon { color: #847671; background: #f5f1ee; }
+.nav-copy small, .sidebar-link, .source-mini span:not(.source-icon):not(.source-live) { color: #8b7f7b; }
+.source-mini { background: #faf8f6; }
+.topbar { border-color: var(--line); background: rgba(250, 248, 246, 0.9); backdrop-filter: blur(16px); }
+.breadcrumb { color: #8b7e79; }
+.scope-toggle { background: #f1ece8; }
+.scope-toggle button { color: #6c5d58; }
+.scope-toggle button.is-active { color: #8d231d; background: #fff; box-shadow: 0 1px 4px rgba(63, 31, 27, 0.12); }
+.topbar-avatar { border-color: rgba(216, 63, 49, 0.16); color: #a02f27; background: #f7e8e4; }
+.icon-button { color: #64534e; background: #fff; }
+.icon-button:hover:not(:disabled) { color: var(--wine); background: #f8f3f0; }
+.button--primary { color: #fff; background: linear-gradient(135deg, #e95a40, #c92f2d); box-shadow: 0 8px 20px rgba(184, 43, 37, 0.2); }
+.button--primary:hover:not(:disabled) { box-shadow: 0 11px 26px rgba(184, 43, 37, 0.28); }
+.button--secondary { color: #3e302c; background: #fff; box-shadow: 0 2px 7px rgba(55, 33, 28, 0.04); }
+.button--secondary:hover:not(:disabled) { background: #fff7f4; }
+.button--ghost { color: #61524e; }
+.select-control { color: #40332f; background: #fff; }
+.select-control:hover { color: #241b18; background: #fff; }
+.main-content, .content { color: var(--text); }
+.page-heading h1, .topbar-title h1, .panel-heading h2, .section-heading h2, .hero-copy h2, .kpi-value, .bike-card > strong, .day-detail h2, .goal-card > strong { color: #28201d; }
+.eyebrow, .calendar-stat span, .calendar-legend, .legend-label { color: #897974; }
+.panel, .kpi-card, .bike-card, .goal-card, .streak-hero, .calendar-panel, .ride-detail-card {
+  border-color: rgba(70, 39, 35, 0.1);
+  background: #fff;
+  box-shadow: 0 7px 24px rgba(74, 43, 37, 0.055);
+}
+.panel { box-shadow: 0 7px 24px rgba(74, 43, 37, 0.055); }
+.hero-card { border-color: #bd302d; background: linear-gradient(112deg, #9f2527 0%, #ce3730 57%, #e45b3b 100%); box-shadow: 0 15px 35px rgba(155, 38, 35, 0.18); }
+.hero-card::before { background: radial-gradient(circle at 76% 42%, rgba(255, 225, 204, 0.24), transparent 32%), linear-gradient(100deg, rgba(255,255,255,0.04), transparent 68%); }
+.hero-kicker, .hero-copy h2, .hero-copy p strong { color: #fff; }
+.hero-copy h2 small, .hero-copy p { color: rgba(255, 244, 238, 0.82); }
+.hero-core { border-color: rgba(255,255,255,0.45); background: radial-gradient(circle at 35% 25%, rgba(255,255,255,0.28), rgba(117, 21, 27, 0.87) 70%); box-shadow: 0 0 40px rgba(73, 11, 17, 0.24), inset 0 0 24px rgba(255,255,255,0.08); }
+.hero-core span { color: rgba(255, 241, 234, 0.78); }
+.hero-core strong { color: #fff; }
+.hero-ring { border-color: rgba(255,255,255,0.2); }
+.hero-ring--outer, .hero-ring--inner { border-color: rgba(255,255,255,0.22); box-shadow: none; }
+.hero-spark { background: #ffd5b6; box-shadow: 0 0 14px 4px rgba(255, 211, 180, 0.65); }
+.kpi-card { background: #fff; }
+.kpi-card::after { filter: blur(32px); opacity: 0.3; }
+.kpi-caption, .kpi-label, .kpi-value { color: #776965; }
+.kpi-value { color: #28201d; }
+.panel-heading p, .page-heading p, .body-copy, .rail-copy, .panel p { color: #766a66; }
+.search-field { color: #766a66; background: #fff; }
+.search-field input { color: #28201d; }
+.search-field input::placeholder, .search-field kbd { color: #958983; }
+.panel-badge { border-color: rgba(216, 63, 49, 0.14); color: #b7352d; background: #fff5f2; }
+.line-chart .chart-axis { stroke: rgba(73, 49, 43, 0.16); }
+.chart-label { fill: #837671; }
+.chart-point { fill: #fff; stroke: #bd302d; }
+.chart-point:hover { fill: #bd302d; }
+.bar-column, .mini-bar { color: #776964; }
+.bar-value { color: #75635d; }
+.bar-chart.cyan { --chart-color: #d83f31; --chart-glow: rgba(216, 63, 49, 0.12); }
+.bar-chart.violet { --chart-color: #963b4b; --chart-glow: rgba(150, 59, 75, 0.12); }
+.bar-chart.lime { --chart-color: #c06c43; --chart-glow: rgba(192, 108, 67, 0.12); }
+.bar-chart.orange { --chart-color: #e96545; --chart-glow: rgba(233, 101, 69, 0.12); }
+.mini-bar i { background: linear-gradient(180deg, #d83f31, rgba(216, 63, 49, 0.18)); box-shadow: none; }
+.ride-row { color: #28201d; }
+.ride-row:hover, .record-row { background: #faf8f6; }
+.ride-date small, .ride-metric small, .record-row small, .calendar-stat span, .bike-stats small, .bike-detail-facts span { color: #877974; }
+.ride-metric strong, .record-row strong { color: #39302c; }
+.ride-save { display: flex; align-items: center; justify-content: flex-end; color: var(--orange); }
+.ride-save.is-favorite .icon { fill: currentColor; }
+.record-row > span:last-child { color: #81736e; }
+.calendar-cell { border-color: rgba(70, 39, 35, 0.07); color: #54433e; background: #f8f5f2; }
+.calendar-cell:hover { border-color: rgba(216, 63, 49, 0.55); color: #7b211c; }
+.calendar-cell.has-rides { border-color: rgba(181, 47, 40, 0.18); color: #76231e; background: rgba(216, 63, 49, calc(0.1 + var(--heat) * 0.46)); }
+.calendar-cell.has-rides.is-intense { color: #fff; background: rgba(190, 44, 39, calc(0.45 + var(--heat) * 0.45)); }
+.calendar-cell b { color: inherit; }
+.calendar-cell.is-selected { border-color: var(--cyan); box-shadow: 0 0 0 2px rgba(216, 63, 49, 0.12); }
+.legend-swatch { background: rgba(216, 63, 49, 0.14); }
+.legend-swatch--mid { background: rgba(216, 63, 49, 0.38); }
+.legend-swatch--high { background: #bd302d; }
+.calendar-toolbar h2, .day-detail h2 { color: #28201d; }
+.bike-card:hover, .bike-card.is-selected { border-color: rgba(216, 63, 49, 0.32); background: #fffaf8; }
+.bike-number, .bike-distance small, .bike-stats small { color: #887975; }
+.bike-detail-facts strong { color: #39302c; }
+.ring-chart { background: conic-gradient(var(--ring-color, var(--cyan)) var(--ring-progress), rgba(70, 39, 35, 0.09) 0); box-shadow: none; }
+.ring-inner { border-color: var(--line); background: #fff; }
+.ring-inner span { color: #82746f; }
+.data-table th { color: #83746f; }
+.data-table td { color: #443833; }
+.data-table tbody tr { border-color: rgba(70, 39, 35, 0.08); }
+.ride-table-row:hover { background: #faf6f3; }
+.table-ride-icon { color: #bf332e; background: #faeae6; }
+.table-ride-name small { color: #8b7e79; }
+.pagination { color: #756963; }
+.insights-rail, .rail-card, .rail-action, .rail-tip { border-color: var(--line); color: var(--text); background: rgba(255,255,255,0.9); }
+.insights-rail { background: rgba(249,247,245,0.7); }
+.rail-action:hover { background: #fff5f2; }
+.rail-live, .rail-copy, .rail-card p, .rail-tip p { color: #766a66; }
+.rail-card h3, .rail-tip strong { color: #302521; }
+.tooltip { border-color: rgba(70, 39, 35, 0.1); color: #332824; background: #fff; box-shadow: 0 12px 30px rgba(45, 24, 20, 0.15); }
+.ride-drawer { border-color: var(--line); background: #fff; box-shadow: -20px 0 55px rgba(45, 24, 20, 0.16); }
+.drawer-header h2, .drawer-grid strong, .drawer-hero strong { color: #302521; }
+.drawer-grid > div, .source-row, .drawer-note { border-color: var(--line); background: #faf8f6; }
+.drawer-grid span, .source-row span, .drawer-hero span, .drawer-note p { color: #786b66; }
+.drawer-hero { border-color: rgba(216, 63, 49, 0.13); background: #fff6f3; }
+.drawer-bike-icon { color: #bd302d; background: #fae7e2; }
+.drawer-backdrop { background: rgba(50, 28, 24, 0.3); }
+.toast { border-color: var(--line); color: #302521; background: #fff; box-shadow: 0 10px 30px rgba(45, 24, 20, 0.14); }
+.auth-card, .empty-panel { border-color: var(--line); color: #302521; background: rgba(255,255,255,0.94); box-shadow: var(--shadow); }
+.auth-copy, .auth-footnote, .empty-panel p { color: #766a66; }
+.auth-mark { color: #bb342d; background: #fae7e2; }
+.mobile-data-controls { border-color: var(--line); background: rgba(250,248,246,0.94); }
+.mobile-data-label { color: #82736e; }
+.sidebar-backdrop { background: rgba(43, 27, 23, 0.34); }
+.distance-stat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.distance-stat-grid .stat-tile { min-height: 125px; justify-content: center; padding: 20px; border: 1px solid var(--line); border-radius: 17px; background: #fff; box-shadow: 0 7px 24px rgba(74, 43, 37, 0.055); }
+.distance-stat-grid .stat-tile > span { color: #796d68; font-size: 10px; font-weight: 700; }
+.distance-stat-grid .stat-tile strong { margin-top: 8px; color: #2c211e; font-family: var(--font-display); font-size: clamp(21px, 2.1vw, 29px); letter-spacing: -0.04em; }
+.distance-stat-grid .stat-tile small { margin-top: 5px; color: #91837d; font-size: 10px; }
+.ride-detail-list { display: grid; gap: 14px; }
+.ride-detail-card { padding: 23px; }
+.ride-detail-heading { display: flex; align-items: center; gap: 13px; margin-bottom: 21px; }
+.ride-detail-heading > div { flex: 1; }
+.ride-detail-heading h2 { margin: 5px 0 0; color: #2b211e; font-size: 20px; }
+.ride-detail-index { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 13px; color: #b3322c; background: #fae9e5; font-family: var(--font-mono); font-size: 12px; font-weight: 700; }
+.ride-detail-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.ride-detail-metrics > div { display: flex; min-width: 0; min-height: 72px; flex-direction: column; justify-content: center; gap: 6px; padding: 12px 14px; border: 1px solid rgba(70,39,35,0.07); border-radius: 12px; background: #faf8f6; }
+.ride-detail-metrics span { color: #82746e; font-size: 10px; }
+.ride-detail-metrics strong { overflow-wrap: anywhere; color: #342925; font-size: 13px; }
+.calendar-months { gap: 25px 22px; }
+.month-heading span { color: #a54138; font-size: 9px; font-weight: 700; }
+.bar-chart { gap: 6px; }
+.weekly-bars .bar-value { display: none; }
+.weekly-bars .bar-column > span { overflow: hidden; max-width: 100%; text-overflow: clip; white-space: nowrap; }
+.bar-column:hover .bar-track i { filter: brightness(1.08); }
+.text-button, .rail-link, .panel-footer-link { color: #ba332c; }
+.chart-empty, .mini-empty { color: #82746f; }
+
+@media (max-width: 780px) {
+  .sidebar { background: #fff; box-shadow: 18px 0 48px rgba(45, 24, 20, 0.16); }
+  .hero-copy p, .hero-copy h2 small { color: rgba(255,244,238,0.88); }
+  .distance-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .distance-stat-grid .stat-tile { min-height: 112px; padding: 15px; }
+  .ride-detail-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .ride-detail-card { padding: 17px; }
+  .bar-chart { gap: 4px; }
+  .bar-column { font-size: 7px; }
+  .bar-value { font-size: 7px; }
+  .weekly-bars .bar-column:nth-child(even) > span { visibility: hidden; }
+}
+@media (max-width: 420px) {
+  .distance-stat-grid .stat-tile strong { font-size: 19px; }
+  .distance-stat-grid .stat-tile > span, .distance-stat-grid .stat-tile small { font-size: 9px; }
+  .ride-detail-metrics > div { padding: 10px; }
 }

@@ -2,12 +2,15 @@ import "./styles.css";
 import type { Dataset, Ride } from "./types";
 import {
   computeDayOfWeekPatterns,
+  computeDistanceSummary,
   computeElevationRatioAnalysis,
   computeHourOfDayPatterns,
   computeHRZoneDistribution,
   computeMonthlyTrends,
   computeProgressiveMetrics,
-  computeSpeedElevationBins
+  computeSpeedElevationBins,
+  computeWeeklyDistances,
+  rideDurationHours
 } from "./analytics";
 import {
   connectGoogle,
@@ -27,6 +30,7 @@ document.body.appendChild(tooltip);
 type Page =
   | "overview"
   | "calendar"
+  | "ride-detail"
   | "performance"
   | "bikes"
   | "streaks"
@@ -40,8 +44,7 @@ type Page =
   | "goals";
 
 type Scope = "year" | "all";
-type Metric = "cfi" | "distance" | "speed" | "elevation";
-type SortKey = "date" | "distance" | "speed" | "elevation" | "hr" | "cfi";
+type SortKey = "date" | "distance" | "speed" | "elevation" | "hr";
 type ToastKind = "success" | "info" | "error";
 
 type GoalValues = {
@@ -55,7 +58,6 @@ type AppState = {
   page: Page;
   year: number | null;
   scope: Scope;
-  metric: Metric;
   loading: boolean;
   syncing: boolean;
   connected: boolean;
@@ -97,10 +99,17 @@ const PAGE_META: Record<Page, PageMeta> = {
     icon: "calendar",
     group: "explore"
   },
+  "ride-detail": {
+    label: "Ride details",
+    title: "Your ride, in full",
+    description: "A complete look at the activities recorded on this date.",
+    icon: "rides",
+    group: "command"
+  },
   performance: {
-    label: "Performance",
-    title: "Performance / CFI",
-    description: "See how your personal fitness index changes across seasons and years.",
+    label: "Distance analytics",
+    title: "Distance, in perspective",
+    description: "Compare typical ride distances and your weekly, monthly, and recent pace.",
     icon: "performance",
     group: "trends"
   },
@@ -135,7 +144,7 @@ const PAGE_META: Record<Page, PageMeta> = {
   "monthly-trends": {
     label: "Monthly trends",
     title: "The shape of your season",
-    description: "Compare distance, climbing, speed, and CFI month by month.",
+    description: "Compare distance, climbing, and speed month by month.",
     icon: "trend",
     group: "trends"
   },
@@ -149,14 +158,14 @@ const PAGE_META: Record<Page, PageMeta> = {
   "hr-zones": {
     label: "HR zones",
     title: "Effort, visualized",
-    description: "A lightweight view of recorded heart-rate intensity and ride CFI.",
+    description: "A lightweight view of recorded heart-rate intensity.",
     icon: "heart",
     group: "trends"
   },
   "progressive-metrics": {
     label: "Progression",
     title: "The long view",
-    description: "Track rolling ten-ride averages and the cumulative shape of your training.",
+    description: "Track rolling speed, moving time, and cumulative training distance.",
     icon: "progression",
     group: "trends"
   },
@@ -238,8 +247,14 @@ function readFavorites(): Set<string> {
 }
 
 function pageFromHash(): Page {
-  const value = window.location.hash.replace(/^#/, "") as Page;
+  const value = window.location.hash.replace(/^#/, "").split("?")[0] as Page;
   return value in PAGE_META ? value : "overview";
+}
+
+function dateFromHash(): string | null {
+  const query = window.location.hash.split("?")[1] ?? "";
+  const date = new URLSearchParams(query).get("date");
+  return date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
 }
 
 const state: AppState = {
@@ -247,7 +262,6 @@ const state: AppState = {
   page: pageFromHash(),
   year: null,
   scope: "year",
-  metric: "cfi",
   loading: true,
   syncing: false,
   connected: false,
@@ -259,7 +273,7 @@ const state: AppState = {
   sortDirection: "desc",
   ridePage: 0,
   selectedRide: null,
-  selectedDate: null,
+  selectedDate: dateFromHash(),
   favorites: readFavorites(),
   goals: readStoredGoals(),
   menuOpen: false,
@@ -288,9 +302,6 @@ const fmt = {
   },
   speed(value: number | null | undefined): string {
     return value === null || value === undefined ? "—" : `${Number(value).toFixed(1)} km/h`;
-  },
-  cfi(value: number | null | undefined): string {
-    return value === null || value === undefined ? "—" : Number(value).toFixed(1);
   },
   percent(value: number | null | undefined): string {
     return value === null || value === undefined ? "—" : `${Number(value).toFixed(0)}%`;
@@ -337,11 +348,6 @@ function sum(values: Array<number | null | undefined>): number {
   return values.reduce<number>((total, value) => total + (value ?? 0), 0);
 }
 
-function average(values: Array<number | null>): number {
-  const valid = values.filter((value): value is number => value !== null && Number.isFinite(value));
-  return valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
-}
-
 function localDate(value: string): Date {
   const [year, month, day] = value.split("-").map(Number);
   return new Date(year, month - 1, day);
@@ -374,7 +380,6 @@ function isFavorite(ride: Ride): boolean {
 function getRideValue(ride: Ride, key: SortKey): number {
   if (key === "date") return localDate(ride.date).getTime();
   if (key === "hr") return ride.hrMean ?? -1;
-  if (key === "cfi") return ride.cfi ?? -1;
   if (key === "speed") return ride.avgSpeed ?? -1;
   return ride[key] ?? -1;
 }
@@ -406,23 +411,13 @@ function currentStreak(rides: Ride[]): number {
   return streak;
 }
 
-function bestRide(rides: Ride[], key: "distance" | "elevation" | "avgSpeed" | "movingHours" | "cfi"): Ride | null {
+function bestRide(rides: Ride[], key: "distance" | "elevation" | "avgSpeed" | "movingHours"): Ride | null {
   if (!rides.length) return null;
   return [...rides].sort((a, b) => (b[key] ?? -Infinity) - (a[key] ?? -Infinity))[0] ?? null;
 }
 
 function scopeLabel(): string {
   return state.scope === "all" ? "All time" : String(getSelectedYear());
-}
-
-function metricLabel(metric: Metric): string {
-  return { cfi: "CFI", distance: "Distance", speed: "Speed", elevation: "Elevation" }[metric];
-}
-
-function metricValue(ride: Ride, metric: Metric): number {
-  if (metric === "cfi") return ride.cfi ?? 0;
-  if (metric === "speed") return ride.avgSpeed ?? 0;
-  return ride[metric] ?? 0;
 }
 
 function scopeYearOptions(): string {
@@ -545,7 +540,7 @@ function renderQualityRail(): string {
   }
   const quality = state.dataset.dataQuality;
   const total = Math.max(1, quality.totalRides);
-  const complete = Math.round((quality.completeRides / total) * 100);
+  const complete = Math.round((quality.ridesWithDistance / total) * 100);
   const fieldRows = [
     ["Distance", quality.missing.distance],
     ["Elevation", quality.missing.elevation],
@@ -555,7 +550,7 @@ function renderQualityRail(): string {
   return `<div class="rail-card rail-card--quality">
     <div class="rail-card-heading"><div><div class="eyebrow">Data pulse</div><h3>Sheet health</h3></div><span class="quality-score">${complete}%</span></div>
     <div class="quality-bar"><span style="width:${complete}%"></span></div>
-    <p class="rail-copy">${fmt.n(quality.completeRides)} of ${fmt.n(quality.totalRides)} rides have the core metrics used for CFI.</p>
+    <p class="rail-copy">${fmt.n(quality.ridesWithDistance)} of ${fmt.n(quality.totalRides)} rides include a distance value.</p>
     <div class="quality-list">${fieldRows.map(([label, missing]) => {
       const coverage = Math.round(((total - missing) / total) * 100);
       return `<div class="quality-row"><span>${label}</span><span class="quality-track"><i style="width:${coverage}%"></i></span><strong>${coverage}%</strong></div>`;
@@ -577,12 +572,6 @@ function renderRail(): string {
       <button class="rail-action" data-page-target="rides">${icon("search", 16)} <span>Find a ride</span>${icon("arrow", 14)}</button>
       <button class="rail-action" data-page-target="goals">${icon("goals", 16)} <span>Set a goal</span>${icon("arrow", 14)}</button>
       <button class="rail-action" data-action="export">${icon("download", 16)} <span>Export visible data</span>${icon("arrow", 14)}</button>
-    </div>
-    <div class="rail-card rail-card--runtime">
-      <div class="eyebrow">Runtime layer</div>
-      <div class="runtime-row"><span class="runtime-dot runtime-dot--cyan"></span><span>View transitions</span><strong id="vtBadge">—</strong></div>
-      <div class="runtime-row"><span class="runtime-dot runtime-dot--violet"></span><span>Ambient renderer</span><strong id="gpuBadge">—</strong></div>
-      <p>Visual enhancement only. Analytics stay local and work without a GPU.</p>
     </div>
     <div class="rail-tip"><span class="tip-star">${icon("spark", 15)}</span><div><strong>Small ritual</strong><p>Sync after your next ride and watch your trendline respond.</p></div></div>
   </aside>`;
@@ -618,13 +607,11 @@ function renderDrawer(): string {
         <div><span>Elevation</span><strong>${fmt.m(ride.elevation)}</strong></div>
         <div><span>Avg speed</span><strong>${fmt.speed(ride.avgSpeed)}</strong></div>
         <div><span>Max speed</span><strong>${fmt.speed(ride.maxSpeed)}</strong></div>
-        <div><span>Moving time</span><strong>${fmt.hours(ride.movingHours)}</strong></div>
+        <div><span>Moving time</span><strong>${rideDurationHours(ride) === null ? "—" : fmt.hours(rideDurationHours(ride))}</strong></div>
         <div><span>Heart rate</span><strong>${ride.hrMean === null ? "—" : `${ride.hrMean.toFixed(0)} bpm`}</strong></div>
         <div><span>Max HR</span><strong>${ride.hrMax === null ? "—" : `${ride.hrMax.toFixed(0)} bpm`}</strong></div>
-        <div><span>CFI</span><strong class="text-violet">${fmt.cfi(ride.cfi)}</strong></div>
       </div>
       <div class="drawer-section"><div class="eyebrow">Source row</div><div class="source-row"><span>Elapsed</span><strong>${escapeHtml(ride.elapsedTime || "—")}</strong><span>Moving</span><strong>${escapeHtml(ride.movingTime || "—")}</strong><span>Start time</span><strong>${escapeHtml(ride.startTime ?? "Not captured")}</strong></div></div>
-      <div class="drawer-note"><span>${icon("info", 15)}</span><p>CFI is a personal relative index, not a medical or clinical measurement.</p></div>
     </aside>`;
 }
 
@@ -635,7 +622,6 @@ function renderToast(): string {
 
 function shell(content: string): string {
   return `<div class="app-shell ${state.menuOpen ? "menu-open" : ""}">
-    <div class="ambient ambient--one"></div><div class="ambient ambient--two"></div><div class="ambient-grid"></div>
     <button class="sidebar-backdrop" data-action="close-menu" aria-label="Close navigation"></button>
     ${renderSidebar()}
     <main class="main-content">
@@ -659,6 +645,7 @@ function renderContent(): string {
   switch (state.page) {
     case "overview": return overviewView();
     case "calendar": return calendarView();
+    case "ride-detail": return rideDetailView();
     case "performance": return performanceView();
     case "bikes": return bikesView();
     case "streaks": return streaksView();
@@ -676,7 +663,7 @@ function renderContent(): string {
 function kpiCard(label: string, value: string, caption: string, iconName: string, tone: string, target?: Page): string {
   const element = target ? "button" : "div";
   const attrs = target ? `data-page-target="${target}"` : "";
-  return `<${element} class="kpi-card kpi-card--${tone} tilt" ${attrs}>
+  return `<${element} class="kpi-card kpi-card--${tone}" ${attrs}>
     <div class="kpi-top"><span class="kpi-icon">${icon(iconName, 17)}</span><span class="kpi-caption">${escapeHtml(caption)}</span></div>
     <div class="kpi-value">${value}</div>
     <div class="kpi-label">${escapeHtml(label)}</div>
@@ -727,10 +714,10 @@ function lineChart(
   </div>`;
 }
 
-function barChart(items: Array<{ label: string; value: number; detail?: string }>, formatter: (value: number) => string, tone = "cyan"): string {
+function barChart(items: Array<{ label: string; value: number; detail?: string }>, formatter: (value: number) => string, tone = "cyan", extraClass = ""): string {
   const max = Math.max(...items.map(item => item.value), 1);
   if (!items.length || items.every(item => item.value === 0)) return `<div class="chart-empty">No activity recorded for this view.</div>`;
-  return `<div class="bar-chart ${tone}">${items.map(item => `<div class="bar-column" data-tooltip="${escapeHtml(`${item.label} · ${formatter(item.value)}${item.detail ? ` · ${item.detail}` : ""}`)}"><div class="bar-value">${formatter(item.value)}</div><div class="bar-track"><i style="height:${Math.max(item.value ? 5 : 0, (item.value / max) * 100)}%"></i></div><span>${escapeHtml(item.label)}</span></div>`).join("")}</div>`;
+  return `<div class="bar-chart ${tone} ${extraClass}">${items.map(item => `<div class="bar-column" data-tooltip="${escapeHtml(`${item.label} · ${formatter(item.value)}${item.detail ? ` · ${item.detail}` : ""}`)}"><div class="bar-value">${formatter(item.value)}</div><div class="bar-track"><i style="height:${Math.max(item.value ? 5 : 0, (item.value / max) * 100)}%"></i></div><span>${escapeHtml(item.label)}</span></div>`).join("")}</div>`;
 }
 
 function ringChart(value: number, total: number, label: string, color = "cyan"): string {
@@ -752,7 +739,7 @@ function rideRow(ride: Ride, compact = false): string {
     <span class="ride-date"><strong>${escapeHtml(fmt.shortDate(ride.date))}</strong><small>${escapeHtml(ride.bike)}</small></span>
     <span class="ride-metric"><strong>${fmt.km(ride.distance)}</strong><small>${fmt.m(ride.elevation)}</small></span>
     <span class="ride-metric ride-metric--speed"><strong>${fmt.speed(ride.avgSpeed)}</strong><small>${ride.hrMean === null ? "HR —" : `${ride.hrMean.toFixed(0)} bpm`}</small></span>
-    <span class="ride-cfi ${favorite ? "is-favorite" : ""}">${favorite ? icon("star", 13) : ""}${fmt.cfi(ride.cfi)}</span>
+    <span class="ride-save ${favorite ? "is-favorite" : ""}">${favorite ? icon("star", 13) : ""}</span>
     ${icon("chevron", 15)}
   </button>`;
 }
@@ -762,16 +749,18 @@ function overviewView(): string {
   if (!rides.length) return emptyPanel("No rides in this scope", "Choose another year or sync the Sheet to refresh your ride log.");
   const totalDistance = sum(rides.map(r => r.distance));
   const totalElevation = sum(rides.map(r => r.elevation));
-  const totalTime = sum(rides.map(r => r.movingHours));
-  const cfi = average(rides.map(r => r.cfi ?? null));
+  const totalTime = sum(rides.map(rideDurationHours));
+  const distanceStats = computeDistanceSummary(rides);
   const monthly = computeMonthlyTrends(rides);
   const recent = [...rides].reverse().slice(0, 5);
   const longest = bestRide(rides, "distance");
   const biggestClimb = bestRide(rides, "elevation");
   const fastest = bestRide(rides, "avgSpeed");
-  const trendRides = rides.slice(-24);
-  const values = trendRides.map(ride => metricValue(ride, state.metric));
-  const labels = trendRides.map(ride => fmt.shortDate(ride.date));
+  const today = new Date();
+  const weeklyEnd = state.scope === "all" || state.year === today.getFullYear()
+    ? today
+    : new Date(getSelectedYear(), 11, 31);
+  const weekly = computeWeeklyDistances(rides, weeklyEnd, 16);
   const maxMonthly = Math.max(...monthly.map(month => month.distanceKm), 1);
   const activeDays = new Set(rides.map(ride => ride.date)).size;
   const streak = currentStreak(rides);
@@ -779,25 +768,25 @@ function overviewView(): string {
   const scope = scopeLabel();
 
   return `<div class="page-stack">
-    ${pageHeader(`${scope} · ${fmt.n(rides.length)} rides`, "Your riding command center", "A live pulse of your distance, consistency, climbing, and performance.", `<button class="button button--secondary" data-action="export">${icon("download", 15)} Export view</button>`)}
+    ${pageHeader(`${scope} · ${fmt.n(rides.length)} rides`, "Your riding, at a glance", "A clear view of the miles, time, and rhythm behind every ride.", `<button class="button button--secondary" data-action="export">${icon("download", 15)} Export view</button>`)}
     <section class="hero-card reveal reveal--delay-1">
-      <div class="hero-copy"><div class="hero-kicker"><span class="status-dot"></span>${latest ? `Last ride ${escapeHtml(fmt.date(latest.date))}` : "Your data is ready"}</div><h2>${totalDistance > 0 ? `${fmt.n(totalDistance, 0)} <small>km explored</small>` : "Your next chapter starts here"}</h2><p>${activeDays ? `You have ridden on <strong>${activeDays} days</strong>${streak > 1 ? ` and your latest block reached <strong>${streak} consecutive days</strong>` : ""}.` : "No rides are available for this scope yet."}</p><div class="hero-actions"><button class="button button--primary" data-page-target="rides">Explore rides ${icon("arrow", 15)}</button><button class="button button--ghost" data-page-target="goals">Set a goal ${icon("goals", 15)}</button></div></div>
-      <div class="hero-visual" aria-hidden="true"><div class="hero-ring hero-ring--outer"></div><div class="hero-ring hero-ring--inner"></div><div class="hero-core"><span>CFI</span><strong>${cfi.toFixed(1)}</strong></div><span class="hero-spark hero-spark--one"></span><span class="hero-spark hero-spark--two"></span></div>
+      <div class="hero-copy"><div class="hero-kicker"><span class="status-dot"></span>${latest ? `Last ride ${escapeHtml(fmt.date(latest.date))}` : "Your data is ready"}</div><h2>${fmt.n(totalDistance, 0)} <small>km ridden</small></h2><p>${activeDays ? `<strong>${activeDays} riding days</strong>${streak > 1 ? ` · a ${streak}-day current streak` : ""}. Keep your history moving one ride at a time.` : "No rides are available for this scope yet."}</p><div class="hero-actions"><button class="button button--primary" data-page-target="rides">Explore rides ${icon("arrow", 15)}</button><button class="button button--ghost" data-page-target="goals">Set a goal ${icon("goals", 15)}</button></div></div>
+      <div class="hero-visual" aria-hidden="true"><div class="hero-ring hero-ring--outer"></div><div class="hero-ring hero-ring--inner"></div><div class="hero-core"><span>RIDES</span><strong>${fmt.n(rides.length)}</strong></div><span class="hero-spark hero-spark--one"></span><span class="hero-spark hero-spark--two"></span></div>
     </section>
     <section class="kpi-grid reveal reveal--delay-2">
-      ${kpiCard("Distance", fmt.km(totalDistance), `${scope} total`, "overview", "cyan", "rides")}
+      ${kpiCard("Mean ride", distanceStats.meanKm === null ? "—" : fmt.km(distanceStats.meanKm), "average distance", "overview", "cyan", "performance")}
       ${kpiCard("Elevation", fmt.m(totalElevation), `${fmt.n(totalElevation / Math.max(totalDistance, 1), 0)} m / km`, "elevation", "violet", "speed-elevation")}
       ${kpiCard("Moving time", fmt.hours(totalTime), `${fmt.n(activeDays)} riding days`, "clock", "lime", "streaks")}
-      ${kpiCard("Mean CFI", fmt.cfi(cfi), "personal index", "performance", "orange", "performance")}
+      ${kpiCard("Weekly average", distanceStats.weeklyAverageKm === null ? "—" : fmt.km(distanceStats.weeklyAverageKm), "per active week", "performance", "orange", "performance")}
       ${kpiCard("Longest ride", longest ? fmt.km(longest.distance) : "—", longest ? fmt.shortDate(longest.date) : "No record", "star", "pink", "rides")}
     </section>
     <section class="content-grid content-grid--main reveal reveal--delay-3">
-      <div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Momentum</div><h2>${metricLabel(state.metric)} trajectory</h2><p>Last ${trendRides.length} rides in ${escapeHtml(scope.toLowerCase())}.</p></div><div class="metric-switcher">${(["cfi", "distance", "speed", "elevation"] as Metric[]).map(metric => `<button class="${state.metric === metric ? "is-active" : ""}" data-metric="${metric}">${metricLabel(metric)}</button>`).join("")}</div></div>${lineChart(values, labels, { color: state.metric === "elevation" ? "#ffc266" : state.metric === "speed" ? "#d87b95" : state.metric === "distance" ? "#ff6b57" : "#ff9a62", valueFormatter: value => state.metric === "cfi" ? value.toFixed(1) : state.metric === "distance" ? `${value.toFixed(1)} km` : state.metric === "speed" ? `${value.toFixed(1)} km/h` : `${value.toFixed(0)} m` })}</div>
-      <div class="panel panel--pulse"><div class="panel-heading"><div><div class="eyebrow">Consistency</div><h2>Seasonal rhythm</h2><p>Distance by month</p></div><button class="text-button" data-page-target="monthly-trends">Full view ${icon("arrow", 14)}</button></div><div class="mini-bars">${monthly.map(month => `<div class="mini-bar" data-tooltip="${escapeHtml(`${month.monthName} · ${fmt.km(month.distanceKm)}`)}"><i style="height:${Math.max(month.distanceKm ? 5 : 0, (month.distanceKm / maxMonthly) * 100)}%"></i><span>${month.monthName.slice(0, 3)}</span></div>`).join("")}</div><div class="pulse-summary"><div><span>Active days</span><strong>${fmt.n(activeDays)}</strong></div><div><span>Latest streak</span><strong>${streak} days</strong></div><div><span>Busiest month</span><strong>${escapeHtml(monthly.find(month => month.distanceKm === Math.max(...monthly.map(item => item.distanceKm)))?.monthName ?? "—")}</strong></div></div></div>
+      <div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Your weekly volume</div><h2>Distance covered</h2><p>Weekly totals · the last 16 weeks of ${escapeHtml(scope.toLowerCase())}</p></div><button class="text-button" data-page-target="performance">All distance stats ${icon("arrow", 14)}</button></div>${barChart(weekly.map(week => ({ label: week.label, value: week.distanceKm, detail: `${week.rides} rides · week of ${week.weekStart}` })), value => fmt.km(value), "cyan", "weekly-bars")}</div>
+      <div class="panel panel--pulse"><div class="panel-heading"><div><div class="eyebrow">Seasonal rhythm</div><h2>Distance by month</h2><p>Monthly totals</p></div><button class="text-button" data-page-target="monthly-trends">Full view ${icon("arrow", 14)}</button></div><div class="mini-bars">${monthly.map(month => `<div class="mini-bar" data-tooltip="${escapeHtml(`${month.monthName} · ${fmt.km(month.distanceKm)}`)}"><i style="height:${Math.max(month.distanceKm ? 5 : 0, (month.distanceKm / maxMonthly) * 100)}%"></i><span>${month.monthName.slice(0, 3)}</span></div>`).join("")}</div><div class="pulse-summary"><div><span>Active days</span><strong>${fmt.n(activeDays)}</strong></div><div><span>Latest streak</span><strong>${streak} days</strong></div><div><span>Busiest month</span><strong>${escapeHtml(monthly.find(month => month.distanceKm === Math.max(...monthly.map(item => item.distanceKm)))?.monthName ?? "—")}</strong></div></div></div>
     </section>
     <section class="content-grid content-grid--lower reveal reveal--delay-4">
       <div class="panel"><div class="panel-heading"><div><div class="eyebrow">Recent activity</div><h2>Latest rides</h2></div><button class="text-button" data-page-target="rides">View all ${icon("arrow", 14)}</button></div><div class="ride-list">${recent.map(ride => rideRow(ride, true)).join("")}</div></div>
-      <div class="panel panel--records"><div class="panel-heading"><div><div class="eyebrow">Personal signals</div><h2>Records to beat</h2></div><span class="panel-badge">${fmt.n(rides.length)} rides</span></div><div class="record-list"><div class="record-row"><span class="record-icon record-icon--cyan">${icon("arrow", 15)}</span><div><small>Longest distance</small><strong>${longest ? fmt.km(longest.distance) : "—"}</strong></div><span>${longest ? escapeHtml(fmt.shortDate(longest.date)) : ""}</span></div><div class="record-row"><span class="record-icon record-icon--lime">${icon("elevation", 15)}</span><div><small>Biggest climb</small><strong>${biggestClimb ? fmt.m(biggestClimb.elevation) : "—"}</strong></div><span>${biggestClimb ? escapeHtml(fmt.shortDate(biggestClimb.date)) : ""}</span></div><div class="record-row"><span class="record-icon record-icon--violet">${icon("performance", 15)}</span><div><small>Fastest average</small><strong>${fastest ? fmt.speed(fastest.avgSpeed) : "—"}</strong></div><span>${fastest ? escapeHtml(fmt.shortDate(fastest.date)) : ""}</span></div></div><button class="panel-footer-link" data-page-target="performance">Explore performance ${icon("arrow", 14)}</button></div>
+      <div class="panel panel--records"><div class="panel-heading"><div><div class="eyebrow">Personal signals</div><h2>Records to beat</h2></div><span class="panel-badge">${fmt.n(rides.length)} rides</span></div><div class="record-list"><div class="record-row"><span class="record-icon record-icon--cyan">${icon("arrow", 15)}</span><div><small>Longest distance</small><strong>${longest ? fmt.km(longest.distance) : "—"}</strong></div><span>${longest ? escapeHtml(fmt.shortDate(longest.date)) : ""}</span></div><div class="record-row"><span class="record-icon record-icon--lime">${icon("elevation", 15)}</span><div><small>Biggest climb</small><strong>${biggestClimb ? fmt.m(biggestClimb.elevation) : "—"}</strong></div><span>${biggestClimb ? escapeHtml(fmt.shortDate(biggestClimb.date)) : ""}</span></div><div class="record-row"><span class="record-icon record-icon--violet">${icon("performance", 15)}</span><div><small>Fastest average</small><strong>${fastest ? fmt.speed(fastest.avgSpeed) : "—"}</strong></div><span>${fastest ? escapeHtml(fmt.shortDate(fastest.date)) : ""}</span></div></div><button class="panel-footer-link" data-page-target="performance">Explore distance analytics ${icon("arrow", 14)}</button></div>
     </section>
   </div>`;
 }
@@ -811,7 +800,11 @@ function calendarView(): string {
     list.push(ride);
     byDate.set(ride.date, list);
   });
-  const maxRides = Math.max(1, ...[...byDate.values()].map(list => list.length));
+  const durations = new Map<string, number>();
+  byDate.forEach((dayRides, date) => {
+    durations.set(date, sum(dayRides.map(rideDurationHours)));
+  });
+  const maxDuration = Math.max(1, ...durations.values());
   const months = Array.from({ length: 12 }, (_, monthIndex) => {
     const month = monthIndex + 1;
     const first = new Date(year, monthIndex, 1);
@@ -822,40 +815,57 @@ function calendarView(): string {
     for (let day = 1; day <= days; day++) {
       const key = dateKey(new Date(year, monthIndex, day));
       const dayRides = byDate.get(key) ?? [];
-      const intensity = dayRides.length / maxRides;
+      const duration = durations.get(key) ?? 0;
+      const intensity = duration / maxDuration;
       const distance = sum(dayRides.map(ride => ride.distance));
-      const tooltip = `${fmt.date(key)}\n${dayRides.length ? `${dayRides.length} ride${dayRides.length === 1 ? "" : "s"} · ${fmt.km(distance)}` : "No ride recorded"}`;
-      cells += `<button class="calendar-cell ${dayRides.length ? "has-rides" : ""} ${state.selectedDate === key ? "is-selected" : ""}" style="--heat:${dayRides.length ? 0.16 + intensity * 0.78 : 0}" data-day="${key}" data-tooltip="${escapeHtml(tooltip)}"><span>${day}</span>${dayRides.length ? `<b>${dayRides.length}</b>` : ""}</button>`;
+      const time = duration ? fmt.hours(duration) : "No riding time";
+      const tooltip = `${fmt.date(key)}\n${dayRides.length ? `${time} · ${fmt.n(dayRides.length)} ride${dayRides.length === 1 ? "" : "s"} · ${fmt.km(distance)}` : "No ride recorded"}`;
+      const marker = duration < 1 ? `${Math.round(duration * 60)}m` : `${fmt.n(duration, 1)}h`;
+      cells += `<button class="calendar-cell ${dayRides.length ? `has-rides ${intensity > 0.62 ? "is-intense" : ""}` : ""}" style="--heat:${duration ? 0.12 + intensity * 0.82 : 0}" data-day="${key}" data-tooltip="${escapeHtml(tooltip)}" aria-label="${escapeHtml(`${fmt.date(key)} · ${dayRides.length ? time : "No ride recorded"}`)}"><span>${day}</span>${dayRides.length ? `<b>${marker}</b>` : ""}</button>`;
     }
-    return `<div class="month-block"><div class="month-heading"><strong>${first.toLocaleDateString(undefined, { month: "long" })}</strong><span>${dayRidesTotal(byDate, year, month)} rides</span></div><div class="weekday-row">${["M", "T", "W", "T", "F", "S", "S"].map(day => `<span>${day}</span>`).join("")}</div><div class="calendar-grid">${cells}</div></div>`;
+    const monthHours = [...durations.entries()].filter(([date]) => date.startsWith(`${year}-${String(month).padStart(2, "0")}`)).reduce((total, [, hours]) => total + hours, 0);
+    return `<div class="month-block"><div class="month-heading"><strong>${first.toLocaleDateString(undefined, { month: "long" })}</strong><span>${monthHours ? fmt.hours(monthHours) : "—"}</span></div><div class="weekday-row">${["M", "T", "W", "T", "F", "S", "S"].map(day => `<span>${day}</span>`).join("")}</div><div class="calendar-grid">${cells}</div></div>`;
   }).join("");
-  const selectedRides = state.selectedDate ? byDate.get(state.selectedDate) ?? [] : [];
-  const selectedDistance = sum(selectedRides.map(ride => ride.distance));
+  const totalHours = sum([...durations.values()]);
   return `<div class="page-stack">
-    ${pageHeader(`${year} · ${fmt.n(rides.length)} rides`, "Every ride has a story", "Click any active day to inspect the rides behind the heatmap.", `<div class="calendar-legend"><span class="legend-label">Less</span><i class="legend-swatch"></i><i class="legend-swatch legend-swatch--mid"></i><i class="legend-swatch legend-swatch--high"></i><span class="legend-label">More</span></div>`)}
-    <div class="calendar-layout">
-      <section class="panel calendar-panel reveal reveal--delay-1"><div class="calendar-toolbar"><div><div class="eyebrow">Annual map</div><h2>${year} riding calendar</h2></div><div class="calendar-stat"><strong>${fmt.n(byDate.size)}</strong><span>active days</span></div><div class="calendar-stat"><strong>${fmt.km(sum(rides.map(ride => ride.distance)))}</strong><span>total distance</span></div></div><div class="calendar-months">${months}</div></section>
-      <aside class="panel day-detail reveal reveal--delay-2">${state.selectedDate ? `<div class="eyebrow">Selected day</div><h2>${escapeHtml(fmt.date(state.selectedDate))}</h2><div class="day-detail-stat"><strong>${fmt.km(selectedDistance)}</strong><span>distance across ${selectedRides.length} ride${selectedRides.length === 1 ? "" : "s"}</span></div><div class="ride-list ride-list--drawer">${selectedRides.length ? selectedRides.map(ride => rideRow(ride, true)).join("") : '<div class="mini-empty">No ride recorded on this day.</div>'}</div>` : `<div class="day-detail-placeholder"><div class="empty-icon">${icon("calendar", 24)}</div><h3>Select a day</h3><p>Choose a square on the calendar to see distance, elevation, and individual rides.</p></div>`}</aside>
-    </div>
+    ${pageHeader(`${year} · ${fmt.n(rides.length)} rides`, "Your year in movement", "Every square measures ride time. Select a date to open the full ride details.", `<div class="calendar-legend"><span class="legend-label">Less time</span><i class="legend-swatch"></i><i class="legend-swatch legend-swatch--mid"></i><i class="legend-swatch legend-swatch--high"></i><span class="legend-label">More time</span></div>`)}
+    <section class="panel calendar-panel reveal reveal--delay-1"><div class="calendar-toolbar"><div><div class="eyebrow">Annual map · moving time</div><h2>${year} riding calendar</h2></div><div class="calendar-stat"><strong>${fmt.n(byDate.size)}</strong><span>active days</span></div><div class="calendar-stat"><strong>${fmt.hours(totalHours)}</strong><span>total ride time</span></div><div class="calendar-stat"><strong>${fmt.km(sum(rides.map(ride => ride.distance)))}</strong><span>total distance</span></div></div><div class="calendar-months">${months}</div></section>
   </div>`;
 }
 
-function dayRidesTotal(byDate: Map<string, Ride[]>, year: number, month: number): number {
-  return [...byDate.entries()].filter(([date]) => date.startsWith(`${year}-${String(month).padStart(2, "0")}`)).reduce((total, [, rides]) => total + rides.length, 0);
+function rideDetailView(): string {
+  const date = state.selectedDate;
+  const rides = date ? state.dataset?.rides.filter(ride => ride.date === date) ?? [] : [];
+  if (!date) return emptyPanel("Choose a calendar date", "Open the calendar and select a day to see its ride details.", `<button class="button button--secondary" data-page-target="calendar">Open calendar ${icon("arrow", 15)}</button>`);
+  if (!rides.length) return `<div class="page-stack">${pageHeader(fmt.date(date), "No ride recorded", "There are no activities in your Sheet for this date.", `<button class="button button--secondary" data-page-target="calendar">${icon("arrow", 15)} Back to calendar</button>`)}</div>`;
+
+  const totalDistance = sum(rides.map(ride => ride.distance));
+  const totalElevation = sum(rides.map(ride => ride.elevation));
+  const totalHours = sum(rides.map(rideDurationHours));
+  return `<div class="page-stack">
+    ${pageHeader(`${fmt.n(rides.length)} ride${rides.length === 1 ? "" : "s"} · ${fmt.hours(totalHours)}`, fmt.date(date), "Every activity and recorded metric for this date.", `<button class="button button--secondary" data-page-target="calendar">${icon("arrow", 15)} Back to calendar</button>`)}
+    <section class="kpi-grid kpi-grid--three reveal reveal--delay-1">${kpiCard("Distance", fmt.km(totalDistance), "combined for this day", "overview", "cyan")}${kpiCard("Elevation", fmt.m(totalElevation), "combined climbing", "elevation", "violet")}${kpiCard("Moving time", fmt.hours(totalHours), `${fmt.n(rides.length)} activities`, "clock", "orange")}</section>
+    <section class="ride-detail-list reveal reveal--delay-2">${rides.map((ride, index) => `<article class="panel ride-detail-card"><div class="ride-detail-heading"><span class="ride-detail-index">${String(index + 1).padStart(2, "0")}</span><div><div class="eyebrow">${escapeHtml(ride.startTime ?? "Ride")}</div><h2>${escapeHtml(ride.bike)}</h2></div><button class="icon-button icon-button--star ${isFavorite(ride) ? "is-starred" : ""}" data-favorite="${ride.id}" aria-label="Toggle favorite">${icon("star", 16)}</button></div><div class="ride-detail-metrics"><div><span>Distance</span><strong>${fmt.km(ride.distance)}</strong></div><div><span>Moving time</span><strong>${rideDurationHours(ride) === null ? "—" : fmt.hours(rideDurationHours(ride))}</strong></div><div><span>Elapsed time</span><strong>${escapeHtml(ride.elapsedTime || "—")}</strong></div><div><span>Elevation gain</span><strong>${fmt.m(ride.elevation)}</strong></div><div><span>Average speed</span><strong>${fmt.speed(ride.avgSpeed)}</strong></div><div><span>Maximum speed</span><strong>${fmt.speed(ride.maxSpeed)}</strong></div><div><span>Average heart rate</span><strong>${ride.hrMean === null ? "—" : `${ride.hrMean.toFixed(0)} bpm`}</strong></div><div><span>Maximum heart rate</span><strong>${ride.hrMax === null ? "—" : `${ride.hrMax.toFixed(0)} bpm`}</strong></div><div><span>Device</span><strong>${escapeHtml(ride.device ?? "Not recorded")}</strong></div></div></article>`).join("")}</section>
+  </div>`;
 }
 
 function performanceView(): string {
-  const allYears = state.dataset?.yearly ?? [];
-  const years = state.scope === "all" ? allYears : allYears.filter(item => item.year === state.year);
   const rides = getScopedRides();
-  const bestCfi = bestRide(rides, "cfi");
-  const fastest = bestRide(rides, "avgSpeed");
-  const longest = bestRide(rides, "distance");
+  const summary = computeDistanceSummary(rides);
+  const monthly = computeMonthlyTrends(rides);
+  const distances = rides.map(ride => ride.distance).filter((distance): distance is number => distance !== null);
+  const step = Math.max(5, Math.ceil((Math.max(...distances, 0) / 8) / 5) * 5);
+  const bucketCount = Math.min(8, Math.max(1, Math.ceil(Math.max(...distances, 0) / step)));
+  const buckets = Array.from({ length: bucketCount }, (_, index) => {
+    const lower = index * step;
+    const upper = lower + step;
+    const count = distances.filter(distance => distance >= lower && (index === bucketCount - 1 ? distance <= upper : distance < upper)).length;
+    return { label: `${lower}–${upper}`, value: count, detail: `${count} rides` };
+  });
   return `<div class="page-stack">
-    ${pageHeader(`${scopeLabel()} · relative performance`, "Performance / CFI", "A personal index built from speed, distance, elevation, moving time, and heart-rate efficiency.", `<button class="button button--secondary" data-page-target="progressive-metrics">View progression ${icon("arrow", 15)}</button>`)}
-    <section class="performance-hero panel reveal reveal--delay-1"><div class="performance-score"><div class="eyebrow">Selected scope index</div><strong>${fmt.cfi(average(rides.map(ride => ride.cfi ?? null)))}</strong><span>out of 100 relative points</span><div class="score-meter"><i style="width:${Math.min(100, average(rides.map(ride => ride.cfi ?? null)))}%"></i></div></div><div class="factor-list"><div class="factor-row"><span>Speed</span><i><b style="width:30%"></b></i><strong>30%</strong></div><div class="factor-row"><span>Distance</span><i><b style="width:20%"></b></i><strong>20%</strong></div><div class="factor-row"><span>Elevation</span><i><b style="width:15%"></b></i><strong>15%</strong></div><div class="factor-row"><span>Moving time</span><i><b style="width:15%"></b></i><strong>15%</strong></div><div class="factor-row"><span>HR efficiency</span><i><b style="width:20%"></b></i><strong>20%</strong></div></div><div class="performance-note"><span>${icon("info", 15)}</span><p>CFI is normalized against your own ride history, so it measures relative change rather than a clinical fitness level.</p></div></section>
-    <section class="content-grid content-grid--main reveal reveal--delay-2"><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Year over year</div><h2>Index progression</h2><p>Annual CFI and distance context</p></div></div>${barChart(years.map(item => ({ label: String(item.year), value: item.cfi, detail: fmt.km(item.distanceKm) })), value => value.toFixed(1), "violet")}</div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Records</div><h2>What is trending up</h2></div></div><div class="record-list record-list--large"><div class="record-row"><span class="record-icon record-icon--violet">${icon("spark", 15)}</span><div><small>Best CFI</small><strong>${bestCfi ? fmt.cfi(bestCfi.cfi) : "—"}</strong></div><span>${bestCfi ? escapeHtml(fmt.shortDate(bestCfi.date)) : ""}</span></div><div class="record-row"><span class="record-icon record-icon--cyan">${icon("performance", 15)}</span><div><small>Fastest average</small><strong>${fastest ? fmt.speed(fastest.avgSpeed) : "—"}</strong></div><span>${fastest ? escapeHtml(fmt.shortDate(fastest.date)) : ""}</span></div><div class="record-row"><span class="record-icon record-icon--lime">${icon("overview", 15)}</span><div><small>Longest ride</small><strong>${longest ? fmt.km(longest.distance) : "—"}</strong></div><span>${longest ? escapeHtml(fmt.shortDate(longest.date)) : ""}</span></div></div></div></section>
-    <section class="panel reveal reveal--delay-3"><div class="panel-heading"><div><div class="eyebrow">Annual ledger</div><h2>Year-by-year context</h2></div></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Year</th><th>Rides</th><th>Distance</th><th>Elevation</th><th>Moving time</th><th>Weighted speed</th><th>CFI</th></tr></thead><tbody>${years.map(item => `<tr><td><strong>${item.year}</strong></td><td>${fmt.n(item.rides)}</td><td>${fmt.km(item.distanceKm)}</td><td>${fmt.m(item.elevationM)}</td><td>${fmt.hours(item.movingTimeH)}</td><td>${fmt.speed(item.weightedSpeed)}</td><td><span class="table-accent">${item.cfi.toFixed(1)}</span></td></tr>`).join("")}</tbody></table></div></section>
+    ${pageHeader(`${scopeLabel()} · ${fmt.n(distances.length)} rides with distance`, "Distance, in perspective", "Mean, median, mode, weekly and monthly averages, plus your rolling seven-day daily average.", `<button class="button button--secondary" data-page-target="progressive-metrics">Rolling trends ${icon("arrow", 15)}</button>`)}
+    <section class="distance-stat-grid reveal reveal--delay-1">${statTile("Mean distance", summary.meanKm === null ? "—" : fmt.km(summary.meanKm), "average ride", "cyan")}${statTile("Median distance", summary.medianKm === null ? "—" : fmt.km(summary.medianKm), "middle ride", "violet")}${statTile("Mode distance", summary.modeKm === null ? "No single mode" : fmt.km(summary.modeKm), "nearest 0.1 km · repeats only", "orange")}${statTile("Weekly average", summary.weeklyAverageKm === null ? "—" : fmt.km(summary.weeklyAverageKm), "per active week", "lime")}${statTile("Monthly average", summary.monthlyAverageKm === null ? "—" : fmt.km(summary.monthlyAverageKm), "per active month", "pink")}${statTile("7-day average", fmt.km(summary.rolling7DayDailyAverageKm), "per day · through today", "cyan")}</section>
+    <section class="content-grid content-grid--main reveal reveal--delay-2"><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Ride distribution</div><h2>How far you usually go</h2><p>Each bar groups rides into a ${step} km distance band.</p></div></div>${barChart(buckets, value => fmt.n(value), "cyan")}</div><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Monthly totals</div><h2>Across the season</h2><p>Distance accumulated in each month.</p></div></div>${lineChart(monthly.map(month => month.distanceKm), monthly.map(month => month.monthName.slice(0, 3)), { color: "#d94436", valueFormatter: value => fmt.km(value) })}</div></section>
   </div>`;
 }
 
@@ -866,8 +876,8 @@ function bikesView(): string {
   const selected = bikes.find(bike => bike.bike === state.bikeFilter);
   return `<div class="page-stack">
     ${pageHeader(`${fmt.n(bikes.length)} bikes · ${fmt.km(totalDistance)} logged`, "Your bikes, decoded", "Every bike has a different rhythm. Compare the way you use them.", `<button class="button button--secondary" data-page-target="rides">Filter ride explorer ${icon("arrow", 15)}</button>`)}
-    <section class="bike-overview-grid reveal reveal--delay-1">${bikes.map((bike, index) => `<button class="bike-card ${selected?.bike === bike.bike ? "is-selected" : ""}" data-bike-filter="${escapeHtml(bike.bike)}"><div class="bike-card-top"><span class="bike-number">0${index + 1}</span><span class="bike-card-icon">${icon("bike", 22)}</span></div><strong>${escapeHtml(bike.bike)}</strong><div class="bike-distance">${fmt.km(bike.distanceKm)} <small>${Math.round((bike.distanceKm / totalDistance) * 100)}% of distance</small></div><div class="share-track"><i style="width:${(bike.distanceKm / totalDistance) * 100}%"></i></div><div class="bike-stats"><span><small>Rides</small><strong>${fmt.n(bike.rides)}</strong></span><span><small>Avg speed</small><strong>${fmt.speed(bike.avgSpeed)}</strong></span><span><small>CFI</small><strong>${fmt.cfi(bike.cfi)}</strong></span></div></button>`).join("")}</section>
-    <section class="content-grid content-grid--main reveal reveal--delay-2"><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Bike contribution</div><h2>Distance share</h2><p>Click a bike above to filter the ride explorer.</p></div></div>${barChart(bikes.map(bike => ({ label: bike.bike.length > 12 ? `${bike.bike.slice(0, 11)}…` : bike.bike, value: bike.distanceKm, detail: `${bike.rides} rides` })), value => fmt.km(value), "cyan")}</div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Selected bike</div><h2>${selected ? escapeHtml(selected.bike) : "Choose a bike"}</h2></div></div>${selected ? `<div class="bike-detail-stat"><div class="bike-detail-ring">${ringChart(selected.distanceKm, totalDistance, "of all distance", "cyan")}</div><div class="bike-detail-facts"><div><span>Longest ride</span><strong>${fmt.km(selected.longestRideKm)}</strong></div><div><span>Elevation</span><strong>${fmt.m(selected.elevationM)}</strong></div><div><span>Avg HR</span><strong>${selected.avgHr === null ? "—" : `${selected.avgHr.toFixed(0)} bpm`}</strong></div></div></div>` : '<div class="mini-empty">Select a bike card to see its detailed contribution.</div>'}</div></section>
+    <section class="bike-overview-grid reveal reveal--delay-1">${bikes.map((bike, index) => `<button class="bike-card ${selected?.bike === bike.bike ? "is-selected" : ""}" data-bike-filter="${escapeHtml(bike.bike)}"><div class="bike-card-top"><span class="bike-number">0${index + 1}</span><span class="bike-card-icon">${icon("bike", 22)}</span></div><strong>${escapeHtml(bike.bike)}</strong><div class="bike-distance">${fmt.km(bike.distanceKm)} <small>${Math.round((bike.distanceKm / totalDistance) * 100)}% of distance</small></div><div class="share-track"><i style="width:${(bike.distanceKm / totalDistance) * 100}%"></i></div><div class="bike-stats"><span><small>Rides</small><strong>${fmt.n(bike.rides)}</strong></span><span><small>Avg speed</small><strong>${fmt.speed(bike.avgSpeed)}</strong></span><span><small>Avg / ride</small><strong>${fmt.km(bike.averageDistanceKm)}</strong></span></div></button>`).join("")}</section>
+    <section class="content-grid content-grid--main reveal reveal--delay-2"><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Bike contribution</div><h2>Distance share</h2><p>Click a bike above to filter the ride explorer.</p></div></div>${barChart(bikes.map(bike => ({ label: bike.bike.length > 12 ? `${bike.bike.slice(0, 11)}…` : bike.bike, value: bike.distanceKm, detail: `${bike.rides} rides` })), value => fmt.km(value), "cyan")}</div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Selected bike</div><h2>${selected ? escapeHtml(selected.bike) : "Choose a bike"}</h2></div></div>${selected ? `<div class="bike-detail-stat"><div class="bike-detail-ring">${ringChart(selected.distanceKm, totalDistance, "of all distance", "cyan")}</div><div class="bike-detail-facts"><div><span>Average distance per ride</span><strong>${fmt.km(selected.averageDistanceKm)}</strong></div><div><span>Longest ride</span><strong>${fmt.km(selected.longestRideKm)}</strong></div><div><span>Elevation</span><strong>${fmt.m(selected.elevationM)}</strong></div><div><span>Avg HR</span><strong>${selected.avgHr === null ? "—" : `${selected.avgHr.toFixed(0)} bpm`}</strong></div></div></div>` : '<div class="mini-empty">Select a bike card to see its detailed contribution.</div>'}</div></section>
   </div>`;
 }
 
@@ -907,8 +917,8 @@ function hourOfDayView(): string {
 function monthlyTrendsView(): string {
   const trends = computeMonthlyTrends(getScopedRides());
   return `<div class="page-stack">
-    ${pageHeader(`${scopeLabel()} · seasonal view`, "The shape of your season", "Compare how distance, elevation, speed, and CFI move through the year.", `<button class="button button--secondary" data-page-target="calendar">See activity map ${icon("arrow", 15)}</button>`)}
-    <section class="content-grid content-grid--main reveal reveal--delay-1"><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Distance trajectory</div><h2>Monthly volume</h2><p>Distance accumulated in each calendar month</p></div></div>${lineChart(trends.map(trend => trend.distanceKm), trends.map(trend => trend.monthName.slice(0, 3)), { color: "#ff6b57", valueFormatter: value => fmt.km(value) })}</div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Month cards</div><h2>Seasonal detail</h2></div></div><div class="month-card-grid">${trends.map(trend => `<div class="month-card ${trend.rides ? "has-data" : ""}"><strong>${escapeHtml(trend.monthName.slice(0, 3))}</strong><span>${fmt.n(trend.rides)} rides</span><b>${fmt.km(trend.distanceKm)}</b><small>${fmt.m(trend.elevationM)} · ${trend.cfI === null ? "CFI —" : `CFI ${trend.cfI.toFixed(1)}`}</small></div>`).join("")}</div></div></section>
+    ${pageHeader(`${scopeLabel()} · seasonal view`, "The shape of your season", "Compare distance, elevation, and average speed through the year.", `<button class="button button--secondary" data-page-target="calendar">See activity map ${icon("arrow", 15)}</button>`)}
+    <section class="content-grid content-grid--main reveal reveal--delay-1"><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Distance trajectory</div><h2>Monthly volume</h2><p>Distance accumulated in each calendar month</p></div></div>${lineChart(trends.map(trend => trend.distanceKm), trends.map(trend => trend.monthName.slice(0, 3)), { color: "#d94436", valueFormatter: value => fmt.km(value) })}</div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Month cards</div><h2>Seasonal detail</h2></div></div><div class="month-card-grid">${trends.map(trend => `<div class="month-card ${trend.rides ? "has-data" : ""}"><strong>${escapeHtml(trend.monthName.slice(0, 3))}</strong><span>${fmt.n(trend.rides)} rides</span><b>${fmt.km(trend.distanceKm)}</b><small>${fmt.m(trend.elevationM)} · ${trend.avgSpeed === null ? "Speed —" : fmt.speed(trend.avgSpeed)}</small></div>`).join("")}</div></div></section>
   </div>`;
 }
 
@@ -928,7 +938,7 @@ function hrZonesView(): string {
   const withHr = total;
   return `<div class="page-stack">
     ${pageHeader(`${scopeLabel()} · ${fmt.n(withHr)} rides with HR`, "Effort, visualized", "A lightweight intensity view based on average heart rate in the source rows.", `<span class="panel-badge">Typical cycling bands</span>`)}
-    <section class="content-grid content-grid--main reveal reveal--delay-1"><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Distribution</div><h2>Average HR zones</h2><p>Ride count by recorded average heart rate</p></div></div>${withHr ? `<div class="zone-layout"><div class="zone-donut">${ringChart(total - (zones[0]?.rides ?? 0), total, "above recovery", "orange")}<div class="zone-legend">${zones.map((zone, index) => `<span><i class="zone-dot zone-dot--${index + 1}"></i>${escapeHtml(zone.label.split(" · ")[0])} <b>${zone.rides}</b></span>`).join("")}</div></div><div class="zone-bars">${zones.map(zone => `<div class="zone-row"><div><span>${escapeHtml(zone.label)}</span><strong>${zone.rides} rides</strong></div><i><b style="width:${total ? (zone.rides / total) * 100 : 0}%"></b></i><small>${fmt.km(zone.distanceKm)} · ${zone.avgCFI === null ? "CFI —" : `CFI ${zone.avgCFI.toFixed(1)}`}</small></div>`).join("")}</div></div>` : emptyPanel("No heart-rate rows yet", "When average HR is present in the Sheet, this view will group rides into readable intensity bands.")}</div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Read this carefully</div><h2>Personal context matters</h2></div></div><div class="callout callout--orange"><span>${icon("info", 18)}</span><p>These fixed bands are a starting point for interpretation, not a medical prescription. Use your own tested zones when available.</p></div><div class="stat-stack">${statTile("Rides with HR", fmt.n(withHr), "recorded average", "orange")}${statTile("Rides without HR", fmt.n(getScopedRides().length - withHr), "missing from this view", "violet")}</div></div></section>
+    <section class="content-grid content-grid--main reveal reveal--delay-1"><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Distribution</div><h2>Average HR zones</h2><p>Ride count by recorded average heart rate</p></div></div>${withHr ? `<div class="zone-layout"><div class="zone-donut">${ringChart(total - (zones[0]?.rides ?? 0), total, "above recovery", "orange")}<div class="zone-legend">${zones.map((zone, index) => `<span><i class="zone-dot zone-dot--${index + 1}"></i>${escapeHtml(zone.label.split(" · ")[0])} <b>${zone.rides}</b></span>`).join("")}</div></div><div class="zone-bars">${zones.map(zone => `<div class="zone-row"><div><span>${escapeHtml(zone.label)}</span><strong>${zone.rides} rides</strong></div><i><b style="width:${total ? (zone.rides / total) * 100 : 0}%"></b></i><small>${fmt.km(zone.distanceKm)}</small></div>`).join("")}</div></div>` : emptyPanel("No heart-rate rows yet", "When average HR is present in the Sheet, this view will group rides into readable intensity bands.")}</div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Read this carefully</div><h2>Personal context matters</h2></div></div><div class="callout callout--orange"><span>${icon("info", 18)}</span><p>These fixed bands are a starting point for interpretation, not a medical prescription. Use your own tested zones when available.</p></div><div class="stat-stack">${statTile("Rides with HR", fmt.n(withHr), "recorded average", "orange")}${statTile("Rides without HR", fmt.n(getScopedRides().length - withHr), "missing from this view", "violet")}</div></div></section>
   </div>`;
 }
 
@@ -937,9 +947,9 @@ function progressiveMetricsView(): string {
   const metrics = computeProgressiveMetrics(rides);
   const latest = metrics.at(-1);
   return `<div class="page-stack">
-    ${pageHeader(`${scopeLabel()} · rolling ten-ride window`, "The long view", "Cumulative distance with a rolling ten-ride average for a less noisy read on progress.", `<button class="button button--secondary" data-page-target="performance">Back to CFI ${icon("arrow", 15)}</button>`)}
-    <section class="kpi-grid kpi-grid--three reveal reveal--delay-1">${kpiCard("Rolling speed", latest?.avgSpeed === null || latest === undefined ? "—" : fmt.speed(latest.avgSpeed), "last 10 rides", "performance", "cyan")}${kpiCard("Rolling CFI", latest?.cfI === null || latest === undefined ? "—" : fmt.cfi(latest.cfI), "last 10 rides", "spark", "violet")}${kpiCard("Cumulative distance", latest ? fmt.km(latest.distanceKm) : "—", `${fmt.n(rides.length)} rides`, "overview", "lime")}</section>
-    <section class="panel panel--chart reveal reveal--delay-2"><div class="panel-heading"><div><div class="eyebrow">Rolling average</div><h2>Progression over time</h2><p>Each point uses the current ride and up to nine previous rides.</p></div></div>${metrics.length > 1 ? lineChart(metrics.map(metric => metric.cfI), metrics.map(metric => `Ride ${metric.index + 1}`), { color: "#d87b95", valueFormatter: value => value.toFixed(1), height: 270 }) : '<div class="chart-empty">Add at least two rides to see a rolling trend.</div>'}</section>
+    ${pageHeader(`${scopeLabel()} · rolling ten-ride window`, "The long view", "See how speed and moving time settle across a rolling group of recent rides.", `<button class="button button--secondary" data-page-target="performance">Distance analytics ${icon("arrow", 15)}</button>`)}
+    <section class="kpi-grid kpi-grid--three reveal reveal--delay-1">${kpiCard("Rolling speed", latest?.avgSpeed === null || latest === undefined ? "—" : fmt.speed(latest.avgSpeed), "average · last 10 rides", "performance", "cyan")}${kpiCard("Moving time", latest?.movingHours === null || latest === undefined ? "—" : fmt.hours(latest.movingHours), "total · last 10 rides", "clock", "violet")}${kpiCard("Cumulative distance", latest ? fmt.km(latest.distanceKm) : "—", `${fmt.n(rides.length)} rides`, "overview", "lime")}</section>
+    <section class="panel panel--chart reveal reveal--delay-2"><div class="panel-heading"><div><div class="eyebrow">Rolling average speed</div><h2>Progression over time</h2><p>Each point uses the current ride and up to nine previous rides.</p></div></div>${metrics.length > 1 ? lineChart(metrics.map(metric => metric.avgSpeed), metrics.map(metric => `Ride ${metric.index + 1}`), { color: "#d94436", valueFormatter: value => fmt.speed(value), height: 270 }) : '<div class="chart-empty">Add at least two rides to see a rolling trend.</div>'}</section>
   </div>`;
 }
 
@@ -952,7 +962,7 @@ function ridesView(): string {
   const bikes = [...new Set((state.dataset?.rides ?? []).map(ride => ride.bike))].sort();
   return `<div class="page-stack">
     ${pageHeader(`${scopeLabel()} · ${fmt.n(allFiltered.length)} matching rides`, "Every ride, searchable", "Search, sort, inspect, favorite, and export the rows behind the charts.", `<button class="button button--secondary" data-action="export">${icon("download", 15)} Export CSV</button>`)}
-    <section class="panel ride-explorer-panel reveal reveal--delay-1"><div class="explorer-toolbar"><label class="search-field">${icon("search", 16)}<input data-input="search" value="${escapeHtml(state.search)}" placeholder="Search date, bike, or device" aria-label="Search rides"/><kbd>/</kbd></label><label class="select-wrap select-wrap--wide"><span class="sr-only">Filter by bike</span><select class="select-control" data-input="bike"><option value="all">All bikes</option>${bikes.map(bike => `<option value="${escapeHtml(bike)}" ${bike === state.bikeFilter ? "selected" : ""}>${escapeHtml(bike)}</option>`).join("")}</select>${icon("chevron", 15)}</label><label class="select-wrap"><span class="sr-only">Sort rides</span><select class="select-control" data-input="sort"><option value="date:desc" ${state.sortKey === "date" && state.sortDirection === "desc" ? "selected" : ""}>Newest first</option><option value="date:asc" ${state.sortKey === "date" && state.sortDirection === "asc" ? "selected" : ""}>Oldest first</option><option value="distance:desc" ${state.sortKey === "distance" && state.sortDirection === "desc" ? "selected" : ""}>Longest distance</option><option value="speed:desc" ${state.sortKey === "speed" && state.sortDirection === "desc" ? "selected" : ""}>Fastest speed</option><option value="elevation:desc" ${state.sortKey === "elevation" && state.sortDirection === "desc" ? "selected" : ""}>Most elevation</option><option value="hr:desc" ${state.sortKey === "hr" && state.sortDirection === "desc" ? "selected" : ""}>Highest HR</option><option value="cfi:desc" ${state.sortKey === "cfi" && state.sortDirection === "desc" ? "selected" : ""}>Highest CFI</option></select>${icon("chevron", 15)}</label>${(state.search || state.bikeFilter !== "all" || state.sortKey !== "date" || state.sortDirection !== "desc") ? '<button class="button button--ghost button--small" data-action="clear-filters">Clear</button>' : ""}</div><div class="table-wrap"><table class="data-table data-table--rides"><thead><tr><th>Ride</th><th>Distance</th><th>Elevation</th><th>Avg speed</th><th>Heart rate</th><th>CFI</th><th></th></tr></thead><tbody>${rides.length ? rides.map(ride => `<tr class="ride-table-row" data-ride-open="${ride.id}" role="button" tabindex="0" aria-label="Open ride from ${escapeHtml(fmt.date(ride.date))}"><td><div class="table-ride-name"><span class="table-ride-icon">${icon("bike", 14)}</span><div><strong>${escapeHtml(fmt.date(ride.date))}</strong><small>${escapeHtml(ride.bike)}</small></div></div></td><td>${fmt.km(ride.distance)}</td><td>${fmt.m(ride.elevation)}</td><td>${fmt.speed(ride.avgSpeed)}</td><td>${ride.hrMean === null ? "—" : `${ride.hrMean.toFixed(0)} bpm`}</td><td><span class="table-accent">${fmt.cfi(ride.cfi)}</span></td><td><button class="icon-button icon-button--star ${isFavorite(ride) ? "is-starred" : ""}" data-favorite="${ride.id}" aria-label="Toggle favorite">${icon("star", 15)}</button></td></tr>`).join("") : '<tr><td colspan="7"><div class="mini-empty">No rides match these filters.</div></td></tr>'}</tbody></table></div><div class="pagination"><span>Showing ${rides.length ? currentPage * pageSize + 1 : 0}–${Math.min((currentPage + 1) * pageSize, allFiltered.length)} of ${fmt.n(allFiltered.length)}</span><div><button class="icon-button" data-page-number="${currentPage - 1}" ${currentPage === 0 ? "disabled" : ""} aria-label="Previous page">${icon("chevron", 15)}</button><span>${currentPage + 1} / ${pageCount}</span><button class="icon-button icon-button--next" data-page-number="${currentPage + 1}" ${currentPage >= pageCount - 1 ? "disabled" : ""} aria-label="Next page">${icon("chevron", 15)}</button></div></div></section>
+    <section class="panel ride-explorer-panel reveal reveal--delay-1"><div class="explorer-toolbar"><label class="search-field">${icon("search", 16)}<input data-input="search" value="${escapeHtml(state.search)}" placeholder="Search date, bike, or device" aria-label="Search rides"/><kbd>/</kbd></label><label class="select-wrap select-wrap--wide"><span class="sr-only">Filter by bike</span><select class="select-control" data-input="bike"><option value="all">All bikes</option>${bikes.map(bike => `<option value="${escapeHtml(bike)}" ${bike === state.bikeFilter ? "selected" : ""}>${escapeHtml(bike)}</option>`).join("")}</select>${icon("chevron", 15)}</label><label class="select-wrap"><span class="sr-only">Sort rides</span><select class="select-control" data-input="sort"><option value="date:desc" ${state.sortKey === "date" && state.sortDirection === "desc" ? "selected" : ""}>Newest first</option><option value="date:asc" ${state.sortKey === "date" && state.sortDirection === "asc" ? "selected" : ""}>Oldest first</option><option value="distance:desc" ${state.sortKey === "distance" && state.sortDirection === "desc" ? "selected" : ""}>Longest distance</option><option value="speed:desc" ${state.sortKey === "speed" && state.sortDirection === "desc" ? "selected" : ""}>Fastest speed</option><option value="elevation:desc" ${state.sortKey === "elevation" && state.sortDirection === "desc" ? "selected" : ""}>Most elevation</option><option value="hr:desc" ${state.sortKey === "hr" && state.sortDirection === "desc" ? "selected" : ""}>Highest HR</option></select>${icon("chevron", 15)}</label>${(state.search || state.bikeFilter !== "all" || state.sortKey !== "date" || state.sortDirection !== "desc") ? '<button class="button button--ghost button--small" data-action="clear-filters">Clear</button>' : ""}</div><div class="table-wrap"><table class="data-table data-table--rides"><thead><tr><th>Ride</th><th>Distance</th><th>Elevation</th><th>Avg speed</th><th>Heart rate</th><th></th></tr></thead><tbody>${rides.length ? rides.map(ride => `<tr class="ride-table-row" data-ride-open="${ride.id}" role="button" tabindex="0" aria-label="Open ride from ${escapeHtml(fmt.date(ride.date))}"><td><div class="table-ride-name"><span class="table-ride-icon">${icon("bike", 14)}</span><div><strong>${escapeHtml(fmt.date(ride.date))}</strong><small>${escapeHtml(ride.bike)}</small></div></div></td><td>${fmt.km(ride.distance)}</td><td>${fmt.m(ride.elevation)}</td><td>${fmt.speed(ride.avgSpeed)}</td><td>${ride.hrMean === null ? "—" : `${ride.hrMean.toFixed(0)} bpm`}</td><td><button class="icon-button icon-button--star ${isFavorite(ride) ? "is-starred" : ""}" data-favorite="${ride.id}" aria-label="Toggle favorite">${icon("star", 15)}</button></td></tr>`).join("") : '<tr><td colspan="6"><div class="mini-empty">No rides match these filters.</div></td></tr>'}</tbody></table></div><div class="pagination"><span>Showing ${rides.length ? currentPage * pageSize + 1 : 0}–${Math.min((currentPage + 1) * pageSize, allFiltered.length)} of ${fmt.n(allFiltered.length)}</span><div><button class="icon-button" data-page-number="${currentPage - 1}" ${currentPage === 0 ? "disabled" : ""} aria-label="Previous page">${icon("chevron", 15)}</button><span>${currentPage + 1} / ${pageCount}</span><button class="icon-button icon-button--next" data-page-number="${currentPage + 1}" ${currentPage >= pageCount - 1 ? "disabled" : ""} aria-label="Next page">${icon("chevron", 15)}</button></div></div></section>
   </div>`;
 }
 
@@ -976,15 +986,7 @@ function goalsView(): string {
 function mountShell(): void {
   app.innerHTML = shell(renderContent());
   bindInputs();
-  bindTilt();
   bindTooltips();
-  updateRuntimeBadges();
-}
-
-function updateRuntimeBadges(): void {
-  const supportsTransitions = typeof (document as Document & { startViewTransition?: unknown }).startViewTransition === "function";
-  const transitionBadge = document.querySelector<HTMLElement>("#vtBadge");
-  if (transitionBadge) transitionBadge.textContent = supportsTransitions ? "NATIVE" : "FALLBACK";
 }
 
 function bindInputs(): void {
@@ -1007,7 +1009,7 @@ function bindInputs(): void {
         mountShell();
       } else if (type === "sort") {
         const [key, direction] = input.value.split(":");
-        if (key === "date" || key === "distance" || key === "speed" || key === "elevation" || key === "hr" || key === "cfi") {
+        if (key === "date" || key === "distance" || key === "speed" || key === "elevation" || key === "hr") {
           state.sortKey = key;
           state.sortDirection = direction === "asc" ? "asc" : "desc";
           state.ridePage = 0;
@@ -1060,38 +1062,7 @@ function moveTooltip(event: PointerEvent, tooltip: HTMLElement): void {
   tooltip.style.top = `${y}px`;
 }
 
-let tiltFrame = 0;
-function bindTilt(): void {
-  cancelAnimationFrame(tiltFrame);
-  const cards = [...document.querySelectorAll<HTMLElement>("[data-tilt]")];
-  if (!cards.length || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  const springs = new Map<HTMLElement, { x: number; y: number; tx: number; ty: number; vx: number; vy: number }>();
-  cards.forEach(card => springs.set(card, { x: 0, y: 0, tx: 0, ty: 0, vx: 0, vy: 0 }));
-  cards.forEach(card => {
-    card.addEventListener("pointermove", event => {
-      const rect = card.getBoundingClientRect();
-      const spring = springs.get(card);
-      if (!spring) return;
-      spring.tx = ((event.clientX - rect.left - rect.width / 2) / rect.width) * 5;
-      spring.ty = ((event.clientY - rect.top - rect.height / 2) / rect.height) * 5;
-    });
-    card.addEventListener("pointerleave", () => {
-      const spring = springs.get(card);
-      if (spring) spring.tx = spring.ty = 0;
-    });
-  });
-  const tick = () => {
-    springs.forEach((spring, card) => {
-      spring.vx = (spring.vx + (spring.tx - spring.x) * 0.08) * 0.8;
-      spring.vy = (spring.vy + (spring.ty - spring.y) * 0.08) * 0.8;
-      spring.x += spring.vx;
-      spring.y += spring.vy;
-      card.style.transform = `translate3d(${spring.x}px, ${spring.y}px, 0)`;
-    });
-    tiltFrame = requestAnimationFrame(tick);
-  };
-  tiltFrame = requestAnimationFrame(tick);
-}
+
 
 function showToast(message: string, kind: ToastKind = "info"): void {
   state.toast = { message, kind };
@@ -1143,9 +1114,13 @@ function openRide(date: string): void {
   mountShell();
 }
 
-function openDay(date: string): void {
+function openCalendarDate(date: string): void {
   state.selectedDate = date;
-  mountShell();
+  state.selectedRide = null;
+  state.page = "ride-detail";
+  state.menuOpen = false;
+  history.pushState({ page: "ride-detail", date }, "", `#ride-detail?date=${date}`);
+  renderWithTransition();
 }
 
 function exportCsv(): void {
@@ -1154,8 +1129,8 @@ function exportCsv(): void {
     showToast("There are no visible rides to export", "error");
     return;
   }
-  const header = ["Date", "Start time", "Bike", "Device", "Distance km", "Elevation m", "Average speed km/h", "Max speed km/h", "Moving time", "Average HR", "Max HR", "CFI"];
-  const rows = rides.map(ride => [ride.date, ride.startTime ?? "", ride.bike, ride.device ?? "", ride.distance ?? "", ride.elevation ?? "", ride.avgSpeed ?? "", ride.maxSpeed ?? "", ride.movingTime, ride.hrMean ?? "", ride.hrMax ?? "", ride.cfi ?? ""]);
+  const header = ["Date", "Start time", "Bike", "Device", "Distance km", "Elevation m", "Average speed km/h", "Max speed km/h", "Moving time", "Average HR", "Max HR"];
+  const rows = rides.map(ride => [ride.date, ride.startTime ?? "", ride.bike, ride.device ?? "", ride.distance ?? "", ride.elevation ?? "", ride.avgSpeed ?? "", ride.maxSpeed ?? "", ride.movingTime, ride.hrMean ?? "", ride.hrMax ?? ""]);
   const csv = [header, ...rows].map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -1198,12 +1173,6 @@ function handleClick(event: MouseEvent): void {
     setScope(scope.dataset.scope as Scope);
     return;
   }
-  const metric = target.closest<HTMLElement>("[data-metric]");
-  if (metric?.dataset.metric) {
-    state.metric = metric.dataset.metric as Metric;
-    mountShell();
-    return;
-  }
   const favorite = target.closest<HTMLElement>("[data-favorite]");
   if (favorite?.dataset.favorite) {
     event.stopPropagation();
@@ -1217,7 +1186,7 @@ function handleClick(event: MouseEvent): void {
   }
   const day = target.closest<HTMLElement>("[data-day]");
   if (day?.dataset.day) {
-    openDay(day.dataset.day);
+    openCalendarDate(day.dataset.day);
     return;
   }
   const bike = target.closest<HTMLElement>("[data-bike-filter]");
@@ -1275,7 +1244,7 @@ function handleKeydown(event: KeyboardEvent): void {
   if (interactive && (event.key === "Enter" || event.key === " ")) {
     event.preventDefault();
     if (interactive.dataset.rideOpen) openRide(interactive.dataset.rideOpen);
-    if (interactive.dataset.day) openDay(interactive.dataset.day);
+    if (interactive.dataset.day) openCalendarDate(interactive.dataset.day);
     return;
   }
   if (event.key === "Escape") {
@@ -1294,7 +1263,7 @@ function handleKeydown(event: KeyboardEvent): void {
 function handlePopState(): void {
   state.page = pageFromHash();
   state.selectedRide = null;
-  state.selectedDate = null;
+  state.selectedDate = dateFromHash();
   mountShell();
 }
 
@@ -1348,105 +1317,7 @@ function applyDataset(result: DatasetResult): void {
   state.ridePage = 0;
 }
 
-async function initWebGPU(): Promise<void> {
-  const badge = document.querySelector<HTMLElement>("#gpuBadge");
-  const setFallback = () => { if (badge) badge.textContent = "FALLBACK"; };
-  const gpu = (navigator as Navigator & { gpu?: { requestAdapter: () => Promise<unknown> } }).gpu;
-  if (!gpu || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    setFallback();
-    return;
-  }
-  try {
-    const adapter = await gpu.requestAdapter() as {
-      requestDevice: () => Promise<{
-        createShaderModule: (descriptor: { code: string }) => unknown;
-        createRenderPipeline: (descriptor: unknown) => { getBindGroupLayout: (group: number) => unknown };
-        createBuffer: (descriptor: unknown) => { size: number; usage: number };
-        createBindGroup: (descriptor: unknown) => unknown;
-        createCommandEncoder: () => {
-          beginRenderPass: (descriptor: unknown) => { setPipeline: (pipeline: unknown) => void; setBindGroup: (group: number, bind: unknown) => void; draw: (count: number) => void; end: () => void };
-          finish: () => unknown;
-        };
-        queue: { writeBuffer: (buffer: unknown, offset: number, data: ArrayBufferView) => void; submit: (commands: unknown[]) => void };
-      }>;
-    } | null;
-    if (!adapter) throw new Error("No WebGPU adapter");
-    const device = await adapter.requestDevice();
-    const canvas = document.createElement("canvas");
-    canvas.className = "webgpu-canvas";
-    canvas.setAttribute("aria-hidden", "true");
-    const context = canvas.getContext("webgpu") as { configure: (descriptor: unknown) => void; getCurrentTexture: () => { createView: () => unknown } } | null;
-    if (!context) throw new Error("No WebGPU context");
-    const gpuAny = gpu as unknown as { getPreferredCanvasFormat: () => string };
-    const format = gpuAny.getPreferredCanvasFormat();
-    const shader = device.createShaderModule({ code: `
-      struct P { res: vec2f, time: f32, pad: f32, mouse: vec2f }
-      @group(0) @binding(0) var<uniform> p: P
-      struct O { @builtin(position) pos: vec4f }
-      @vertex fn vs(@builtin(vertex_index) i: u32) -> O {
-        var a = array<vec2f, 3>(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3))
-        var o: O; o.pos = vec4f(a[i], 0, 1); return o
-      }
-      @fragment fn fs(@builtin(position) f: vec4f) -> @location(0) vec4f {
-        let uv = f.xy / p.res
-        let q = (uv - .5) * vec2f(p.res.x / max(p.res.y, 1.), 1.) * 2.
-        let m = (p.mouse - .5) * vec2f(p.res.x / max(p.res.y, 1.), 1.) * 2.
-        var c = vec3f(.012, .003, .005)
-        for (var i: u32 = 0u; i < 28u; i++) {
-          let fi = f32(i)
-          let a = fi * .57 + p.time * (.035 + fi * .002)
-          let r = .12 + fract(sin(fi * 91.7) * 13.1) * .9
-          var pos = vec2f(cos(a), sin(a)) * r
-          pos += (m - pos) * exp(-length(q - m) * 2.) * .12
-          let g = exp(-length(q - pos) * 72.)
-          c += g * mix(vec3f(1., .2, .1), vec3f(.8, .06, .2), fract(fi * .19))
-        }
-        return vec4f(c, 1.)
-      }
-    `});
-    const pipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module: shader, entryPoint: "vs" },
-      fragment: { module: shader, entryPoint: "fs", targets: [{ format }] },
-      primitive: { topology: "triangle-list" }
-    });
-    const buffer = device.createBuffer({ size: 32, usage: 0x40 | 0x8 });
-    const bindGroup = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer } }] });
-    const mouse = { x: 0.5, y: 0.5 };
-    const resize = () => {
-      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
-      canvas.width = Math.floor(window.innerWidth * ratio);
-      canvas.height = Math.floor(window.innerHeight * ratio);
-      context.configure({ device, format, alphaMode: "premultiplied" });
-    };
-    const onPointerMove = (event: PointerEvent) => { mouse.x = event.clientX / window.innerWidth; mouse.y = event.clientY / window.innerHeight; };
-    const onResize = () => resize();
-    document.body.prepend(canvas);
-    resize();
-    window.addEventListener("pointermove", onPointerMove, { passive: true });
-    window.addEventListener("resize", onResize, { passive: true });
-    const start = performance.now();
-    let running = true;
-    const loop = () => {
-      if (!running) return;
-      device.queue.writeBuffer(buffer, 0, new Float32Array([canvas.width, canvas.height, (performance.now() - start) / 1000, 0, mouse.x, mouse.y, 0, 0]));
-      const encoder = device.createCommandEncoder();
-      const pass = encoder.beginRenderPass({ colorAttachments: [{ view: context.getCurrentTexture().createView(), clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: "clear", storeOp: "store" }] });
-      pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.draw(3); pass.end();
-      device.queue.submit([encoder.finish()]);
-      requestAnimationFrame(loop);
-    };
-    const onVisibility = () => {
-      if (document.hidden) running = false;
-      else if (!running) { running = true; requestAnimationFrame(loop); }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    loop();
-    if (badge) badge.textContent = "LIVE";
-  } catch {
-    setFallback();
-  }
-}
+
 
 app.addEventListener("click", handleClick);
 document.addEventListener("keydown", handleKeydown);
@@ -1455,4 +1326,3 @@ window.addEventListener("hashchange", handlePopState);
 
 mountShell();
 void loadData();
-void initWebGPU();

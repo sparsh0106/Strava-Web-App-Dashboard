@@ -12,7 +12,9 @@ import type {
   Ride,
   SpeedElevationBin,
   Streak,
-  YearStat
+  YearStat,
+  DistanceSummary,
+  WeeklyDistance
 } from "./types";
 
 const FIREFOX = "Firefox Road Runner Pro D";
@@ -117,16 +119,6 @@ function parseDuration(value: unknown): number | null {
   return null;
 }
 
-function percentile(values: number[]): Map<number, number> {
-  const valid = values.filter(Number.isFinite).sort((a, b) => a - b);
-  const out = new Map<number, number>();
-  const n = valid.length;
-  valid.forEach((v, i) => {
-    if (!out.has(v)) out.set(v, ((i + 1) / n) * 100);
-  });
-  return out;
-}
-
 function avg(values: Array<number | null>): number | null {
   const valid = values.filter((x): x is number => Number.isFinite(x));
   return valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null;
@@ -139,48 +131,6 @@ function maxOrZero(values: Array<number | null>): number {
 function localDateFromISO(value: string): Date {
   const [year, month, day] = value.split("-").map(Number);
   return new Date(year, month - 1, day);
-}
-
-function ridgePredict(
-  xRows: number[][],
-  yValues: number[],
-  row: number[],
-  alpha = 10
-): number {
-  const p = row.length;
-  const n = p + 1;
-  const A = Array.from({ length: n }, () => Array(n).fill(0));
-  const b = Array(n).fill(0);
-
-  for (let i = 0; i < xRows.length; i++) {
-    const x = [1, ...xRows[i]];
-    for (let r = 0; r < n; r++) {
-      b[r] += x[r] * yValues[i];
-      for (let c = 0; c < n; c++) A[r][c] += x[r] * x[c];
-    }
-  }
-  for (let i = 1; i < n; i++) A[i][i] += alpha;
-
-  for (let i = 0; i < n; i++) {
-    let pivot = i;
-    for (let r = i + 1; r < n; r++) {
-      if (Math.abs(A[r][i]) > Math.abs(A[pivot][i])) pivot = r;
-    }
-    [A[i], A[pivot]] = [A[pivot], A[i]];
-    const div = A[i][i] || 1e-12;
-    for (let c = i; c < n; c++) A[i][c] /= div;
-    b[i] /= div;
-    for (let r = 0; r < n; r++) {
-      if (r === i) continue;
-      const factor = A[r][i];
-      if (!factor) continue;
-      for (let c = i; c < n; c++) A[r][c] -= factor * A[i][c];
-      b[r] -= factor * b[i];
-    }
-  }
-
-  const x = [1, ...row];
-  return x.reduce((sum, value, index) => sum + value * b[index], 0);
 }
 
 export function normalizeRows(rows: string[][]): Ride[] {
@@ -216,74 +166,6 @@ export function normalizeRows(rows: string[][]): Ride[] {
   return data.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function addCFI(rides: Ride[]): void {
-  const speedMap = percentile(rides.map(r => r.avgSpeed ?? NaN));
-  const distanceMap = percentile(rides.map(r => r.distance ?? NaN));
-  const elevationMap = percentile(rides.map(r => r.elevation ?? NaN));
-  const durationMap = percentile(rides.map(r => r.movingHours ?? NaN));
-
-  const efficiencies = rides.map(r =>
-    r.avgSpeed !== null && r.hrMean !== null && r.hrMean > 0
-      ? r.avgSpeed / r.hrMean
-      : NaN
-  );
-  const hrMap = percentile(efficiencies);
-  const featureRows: number[][] = [];
-  const yRows: number[] = [];
-
-  rides.forEach(r => {
-    const features = [
-      speedMap.get(r.avgSpeed ?? NaN) ?? NaN,
-      distanceMap.get(r.distance ?? NaN) ?? NaN,
-      elevationMap.get(r.elevation ?? NaN) ?? NaN,
-      durationMap.get(r.movingHours ?? NaN) ?? NaN
-    ];
-    const hrScore = hrMap.get(
-      r.avgSpeed !== null && r.hrMean !== null && r.hrMean > 0
-        ? r.avgSpeed / r.hrMean
-        : NaN
-    );
-    if (hrScore !== undefined && features.every(Number.isFinite)) {
-      featureRows.push(features);
-      yRows.push(hrScore);
-    }
-  });
-
-  rides.forEach(r => {
-    const speedScore = speedMap.get(r.avgSpeed ?? NaN) ?? 50;
-    const distanceScore = distanceMap.get(r.distance ?? NaN) ?? 50;
-    const elevationScore = elevationMap.get(r.elevation ?? NaN) ?? 50;
-    const durationScore = durationMap.get(r.movingHours ?? NaN) ?? 50;
-    let hrScore = hrMap.get(
-      r.avgSpeed !== null && r.hrMean !== null && r.hrMean > 0
-        ? r.avgSpeed / r.hrMean
-        : NaN
-    );
-
-    if (hrScore === undefined && featureRows.length) {
-      hrScore = Math.max(
-        0,
-        Math.min(
-          100,
-          ridgePredict(
-            featureRows,
-            yRows,
-            [speedScore, distanceScore, elevationScore, durationScore]
-          )
-        )
-      );
-    }
-    if (hrScore === undefined) hrScore = 50;
-
-    r.cfi =
-      0.30 * speedScore +
-      0.20 * distanceScore +
-      0.15 * elevationScore +
-      0.15 * durationScore +
-      0.20 * hrScore;
-  });
-}
-
 function buildDataQuality(rides: Ride[]): DataQuality {
   const missing = {
     distance: rides.filter(r => r.distance === null).length,
@@ -293,15 +175,8 @@ function buildDataQuality(rides: Ride[]): DataQuality {
     movingTime: rides.filter(r => r.movingHours === null).length,
     startTime: rides.filter(r => r.startTime === null).length
   };
-  const completeRides = rides.filter(
-    r =>
-      r.distance !== null &&
-      r.elevation !== null &&
-      r.avgSpeed !== null &&
-      r.hrMean !== null &&
-      r.movingHours !== null
-  ).length;
-  return { totalRides: rides.length, completeRides, missing };
+  const ridesWithDistance = rides.filter(r => r.distance !== null).length;
+  return { totalRides: rides.length, ridesWithDistance, missing };
 }
 
 function buildStreaks(rides: Ride[]): Streak[] {
@@ -340,8 +215,6 @@ function buildStreaks(rides: Ride[]): Streak[] {
 }
 
 export function buildDataset(rides: Ride[]): Dataset {
-  addCFI(rides);
-
   const dailyMap = new Map<string, Ride[]>();
   rides.forEach(r => {
     const day = dailyMap.get(r.date) ?? [];
@@ -356,8 +229,7 @@ export function buildDataset(rides: Ride[]): Dataset {
       distanceKm: dayRides.reduce((s, r) => s + (r.distance ?? 0), 0),
       elevationM: dayRides.reduce((s, r) => s + (r.elevation ?? 0), 0),
       avgSpeed: avg(dayRides.map(r => r.avgSpeed)),
-      avgHr: avg(dayRides.map(r => r.hrMean)),
-      cfi: avg(dayRides.map(r => r.cfi ?? null))
+      avgHr: avg(dayRides.map(r => r.hrMean))
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
@@ -375,7 +247,6 @@ export function buildDataset(rides: Ride[]): Dataset {
       weightedSpeed: movingTime > 0 ? distance / movingTime : 0,
       movingTimeH: movingTime,
       avgHr: avg(yearRides.map(r => r.hrMean)),
-      cfi: avg(yearRides.map(r => r.cfi ?? null)) ?? 0,
       longestRideKm: maxOrZero(yearRides.map(r => r.distance))
     };
   });
@@ -389,11 +260,11 @@ export function buildDataset(rides: Ride[]): Dataset {
         bike,
         rides: bikeRides.length,
         distanceKm: distance,
+        averageDistanceKm: avg(bikeRides.map(r => r.distance)) ?? 0,
         avgSpeed: avg(bikeRides.map(r => r.avgSpeed)) ?? 0,
         weightedSpeed: movingTime > 0 ? distance / movingTime : 0,
         elevationM: bikeRides.reduce((s, r) => s + (r.elevation ?? 0), 0),
         avgHr: avg(bikeRides.map(r => r.hrMean)),
-        cfi: avg(bikeRides.map(r => r.cfi ?? null)) ?? 0,
         longestRideKm: maxOrZero(bikeRides.map(r => r.distance))
       };
     })
@@ -419,10 +290,111 @@ export function buildDataset(rides: Ride[]): Dataset {
       movingTimeH: movingTime,
       longestRideKm: maxOrZero(rides.map(r => r.distance)),
       fastestAvgSpeed: maxOrZero(rides.map(r => r.avgSpeed)),
-      weightedSpeed: movingTime > 0 ? distance / movingTime : 0,
-      cfi: avg(rides.map(r => r.cfi ?? null)) ?? 0
+      weightedSpeed: movingTime > 0 ? distance / movingTime : 0
     }
   };
+}
+
+export function rideDurationHours(ride: Ride): number | null {
+  if (ride.movingHours !== null) return ride.movingHours;
+  const elapsedSeconds = parseDuration(ride.elapsedTime);
+  return elapsedSeconds === null ? null : elapsedSeconds / 3600;
+}
+
+function mondayFor(date: Date): Date {
+  const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  return monday;
+}
+
+export function computeDistanceSummary(rides: Ride[], today = new Date()): DistanceSummary {
+  const distances = rides
+    .map(ride => ride.distance)
+    .filter((value): value is number => value !== null && Number.isFinite(value))
+    .sort((a, b) => a - b);
+  const meanKm = distances.length
+    ? distances.reduce((total, value) => total + value, 0) / distances.length
+    : null;
+  const middle = Math.floor(distances.length / 2);
+  const medianKm = distances.length
+    ? distances.length % 2
+      ? distances[middle]
+      : (distances[middle - 1] + distances[middle]) / 2
+    : null;
+
+  const frequencies = new Map<number, number>();
+  distances.forEach(distance => {
+    const rounded = Number(distance.toFixed(1));
+    frequencies.set(rounded, (frequencies.get(rounded) ?? 0) + 1);
+  });
+  const highestFrequency = Math.max(0, ...frequencies.values());
+  const modes = [...frequencies.entries()]
+    .filter(([, frequency]) => frequency === highestFrequency && frequency > 1)
+    .map(([distance]) => distance);
+  const modeKm = modes.length === 1 ? modes[0] : null;
+
+  const distanceRides = rides.filter(ride => ride.distance !== null);
+  const activeWeeks = new Set<string>();
+  const activeMonths = new Set<string>();
+  distanceRides.forEach(ride => {
+    activeWeeks.add(isoDate(mondayFor(localDateFromISO(ride.date))));
+    activeMonths.add(ride.date.slice(0, 7));
+  });
+
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const weekAgo = new Date(todayStart);
+  weekAgo.setDate(weekAgo.getDate() - 6);
+  const lastSevenDaysDistance = rides.reduce((total, ride) => {
+    const rideDate = localDateFromISO(ride.date);
+    return rideDate >= weekAgo && rideDate <= todayStart
+      ? total + (ride.distance ?? 0)
+      : total;
+  }, 0);
+
+  return {
+    meanKm,
+    medianKm,
+    modeKm,
+    weeklyAverageKm: activeWeeks.size ? distances.reduce((a, b) => a + b, 0) / activeWeeks.size : null,
+    monthlyAverageKm: activeMonths.size ? distances.reduce((a, b) => a + b, 0) / activeMonths.size : null,
+    rolling7DayDailyAverageKm: lastSevenDaysDistance / 7
+  };
+}
+
+export function computeWeeklyDistances(
+  rides: Ride[],
+  endDate: Date,
+  weekCount = 16
+): WeeklyDistance[] {
+  const count = Math.max(1, weekCount);
+  const lastWeek = mondayFor(endDate);
+  const firstWeek = new Date(lastWeek);
+  firstWeek.setDate(firstWeek.getDate() - (count - 1) * 7);
+  const buckets = new Map<string, { distanceKm: number; rides: number }>();
+
+  for (let index = 0; index < count; index++) {
+    const start = new Date(firstWeek);
+    start.setDate(start.getDate() + index * 7);
+    buckets.set(isoDate(start), { distanceKm: 0, rides: 0 });
+  }
+
+  rides.forEach(ride => {
+    const weekStart = isoDate(mondayFor(localDateFromISO(ride.date)));
+    const bucket = buckets.get(weekStart);
+    if (!bucket) return;
+    bucket.distanceKm += ride.distance ?? 0;
+    bucket.rides += 1;
+  });
+
+  return [...buckets.entries()].map(([weekStart, bucket]) => {
+    const start = localDateFromISO(weekStart);
+    return {
+      weekStart,
+      label: start.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      distanceKm: bucket.distanceKm,
+      rides: bucket.rides
+    };
+  });
 }
 
 export function computeDayOfWeekPatterns(rides: Ride[]): DayOfWeekPattern[] {
@@ -493,9 +465,7 @@ export function computeMonthlyTrends(rides: Ride[]): MonthlyTrend[] {
     distanceKm: 0,
     elevationM: 0,
     speedSum: 0,
-    speedCount: 0,
-    cfSum: 0,
-    cfCount: 0
+    speedCount: 0
   }));
 
   rides.forEach(r => {
@@ -508,10 +478,6 @@ export function computeMonthlyTrends(rides: Ride[]): MonthlyTrend[] {
       bucket.speedSum += r.avgSpeed;
       bucket.speedCount += 1;
     }
-    if (r.cfi !== null && r.cfi !== undefined) {
-      bucket.cfSum += r.cfi;
-      bucket.cfCount += 1;
-    }
   });
 
   return buckets.map(bucket => ({
@@ -520,8 +486,7 @@ export function computeMonthlyTrends(rides: Ride[]): MonthlyTrend[] {
     rides: bucket.rides,
     distanceKm: bucket.distanceKm,
     elevationM: bucket.elevationM,
-    avgSpeed: bucket.speedCount ? bucket.speedSum / bucket.speedCount : null,
-    cfI: bucket.cfCount ? bucket.cfSum / bucket.cfCount : null
+    avgSpeed: bucket.speedCount ? bucket.speedSum / bucket.speedCount : null
   }));
 }
 
@@ -562,14 +527,12 @@ export function computeSpeedElevationBins(
 
 export function computeHRZoneDistribution(rides: Ride[]): HRZone[] {
   const zones: HRZone[] = [
-    { min: 0, max: 113, label: "Zone 1 · Recovery", rides: 0, distanceKm: 0, avgCFI: null },
-    { min: 113, max: 130, label: "Zone 2 · Endurance", rides: 0, distanceKm: 0, avgCFI: null },
-    { min: 130, max: 147, label: "Zone 3 · Tempo", rides: 0, distanceKm: 0, avgCFI: null },
-    { min: 147, max: 164, label: "Zone 4 · Threshold", rides: 0, distanceKm: 0, avgCFI: null },
-    { min: 164, max: 999, label: "Zone 5 · VO₂ max", rides: 0, distanceKm: 0, avgCFI: null }
+    { min: 0, max: 113, label: "Zone 1 · Recovery", rides: 0, distanceKm: 0 },
+    { min: 113, max: 130, label: "Zone 2 · Endurance", rides: 0, distanceKm: 0 },
+    { min: 130, max: 147, label: "Zone 3 · Tempo", rides: 0, distanceKm: 0 },
+    { min: 147, max: 164, label: "Zone 4 · Threshold", rides: 0, distanceKm: 0 },
+    { min: 164, max: 999, label: "Zone 5 · VO₂ max", rides: 0, distanceKm: 0 }
   ];
-  const cfSums = new Map<number, number>();
-  const cfCounts = new Map<number, number>();
 
   rides.forEach(ride => {
     if (ride.hrMean === null) return;
@@ -580,15 +543,6 @@ export function computeHRZoneDistribution(rides: Ride[]): HRZone[] {
     const zone = zones[index];
     zone.rides += 1;
     zone.distanceKm += ride.distance ?? 0;
-    if (ride.cfi !== null && ride.cfi !== undefined) {
-      cfSums.set(index, (cfSums.get(index) ?? 0) + ride.cfi);
-      cfCounts.set(index, (cfCounts.get(index) ?? 0) + 1);
-    }
-  });
-
-  zones.forEach((zone, index) => {
-    const count = cfCounts.get(index) ?? 0;
-    zone.avgCFI = count ? (cfSums.get(index) ?? 0) / count : null;
   });
   return zones;
 }
@@ -603,13 +557,11 @@ export function computeProgressiveMetrics(rides: Ride[], windowSize = 10): Progr
     cumulativeDistance += ride.distance ?? 0;
     const window = sorted.slice(Math.max(0, index - windowSize + 1), index + 1);
     const speedValues = window.map(r => r.avgSpeed);
-    const cfiValues = window.map(r => r.cfi ?? null);
     const movingValues = window.map(r => r.movingHours);
     metrics.push({
       index,
       distanceKm: cumulativeDistance,
       avgSpeed: avg(speedValues),
-      cfI: avg(cfiValues),
       movingHours: movingValues.some(value => value !== null)
         ? movingValues.reduce<number>((sum, value) => sum + (value ?? 0), 0)
         : null

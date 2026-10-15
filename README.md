@@ -2,7 +2,7 @@
 
 **RideScope** is a private, interactive cycling analytics dashboard for a Strava activity export stored in a personal Google Sheet.
 
-It turns a simple Sheet into a fast command center for distance, climbing, consistency, performance, bike usage, and ride-level exploration. The Google OAuth exchange and Sheet API calls stay on the Node server; the browser only receives the rows needed to calculate local analytics.
+It turns a simple Sheet into a clear command center for distance, climbing, consistency, performance, bike usage, and ride-level exploration. The Google OAuth exchange and Sheet API calls stay on the Node server; the browser only receives the rows needed to calculate local analytics.
 
 ---
 
@@ -10,33 +10,32 @@ It turns a simple Sheet into a fast command center for distance, climbing, consi
 
 RideScope currently includes:
 
-- **Overview command center** with distance, elevation, moving time, CFI, seasonal rhythm, recent rides, and personal signals.
-- **Interactive annual calendar** with ride heatmap intensity and clickable day details.
-- **CFI performance view** with annual comparison, factor weighting, personal records, and a year-by-year ledger.
-- **Bike analysis** with distance share, ride counts, speed, CFI, elevation, and bike-specific ride filtering.
+- **Overview command center** with key stats, interactive weekly distance bars, seasonal rhythm, recent rides, and personal records.
+- **Interactive annual calendar** whose red heatmap measures daily ride time; selecting a date opens a shareable ride-details page.
+- **Distance analytics** with mean, median, mode, active-week and active-month averages, and a seven-day daily average through today.
+- **Bike analysis** with distance share, ride counts, average distance per ride, speed, elevation, and bike-specific ride filtering.
 - **Consistency analysis** with current and historical 3+ day streaks.
 - **Weekly and monthly pattern views** built from timezone-safe local calendar dates.
 - **Speed/elevation profile** with binned terrain analysis and elevation-per-kilometer statistics.
 - **Heart-rate zone view** for rows that contain average HR.
-- **Ten-ride rolling progression metrics** with cumulative distance context.
+- **Ten-ride rolling progression metrics** for average speed, moving time, and cumulative distance.
 - **Ride explorer** with search, bike filters, sorting, pagination, favorites, detail drawers, and CSV export.
 - **Personal goals** for distance, ride count, and elevation. Goals are stored in the browser and never written to the Sheet.
 - **Data-quality panel** showing coverage for distance, elevation, HR, moving time, and optional start time.
-- **Responsive mobile navigation**, accessible labels/focus states, reduced-motion support, and an optional WebGPU ambient renderer.
+- **Responsive mobile navigation**, accessible labels and focus states, and reduced-motion support.
 
 The application is intentionally dependency-light: the charts and interaction layer use browser-native SVG, CSS, and DOM APIs.
 
 ## Visual system
 
-RideScope uses an **ember-red** visual language: oxblood and near-black surfaces, vermilion primary actions, coral highlights, warm gold secondary metrics, and rose-toned data accents. Red is reserved for emphasis and navigation rather than filling every surface, which keeps dense cycling data readable.
+RideScope uses a **light vermilion** visual language: warm white surfaces, charcoal text, and confident red accents inspired by Strava’s activity dashboard. Layouts reflow for phone screens, with touch-sized controls and scrollable data tables.
 
-The interface loads three complementary typefaces from Google Fonts:
+The interface uses a familiar Google-style type system from Google Fonts:
 
-- **Space Grotesk** for display headings, navigation, and large metrics
-- **Manrope** for body copy, controls, and readable dashboard content
-- **DM Mono** for dates, measurements, CFI values, and technical labels
+- **Roboto** for headings, navigation, metrics, and body copy
+- **Roboto Mono** for compact measurements and chart labels
 
-The CSS includes system fallbacks for all three families, so the dashboard remains usable if font loading is delayed or unavailable.
+The CSS includes system fallbacks for both families, so the dashboard remains usable if font loading is delayed or unavailable.
 
 ---
 
@@ -63,9 +62,10 @@ Vite browser UI + SVG/CSS visualizations
 ```text
 .
 ├── index.html                 Browser entry document
+├── PROJECT_CONTEXT.md         Durable product and implementation context
 ├── server/index.js            OAuth, Sheet API, session, production server
 ├── src/
-│   ├── analytics.ts           Parsing, normalization, CFI, derived analytics
+│   ├── analytics.ts           Parsing, normalization, and derived analytics
 │   ├── main.ts                State, views, interactions, and rendering
 │   ├── sheets.ts              Browser API client
 │   ├── styles.css             Design system, layout, motion, responsive rules
@@ -196,19 +196,13 @@ Both `DD/MM/YYYY` and `YYYY-MM-DD` date prefixes are recognized. Dates are parse
 
 ## Analytics notes
 
-### Cycling Fitness Index (CFI)
+### Distance summary definitions
 
-CFI is a personal relative index calculated from percentile-normalized ride history:
-
-- Average speed: **30%**
-- Distance: **20%**
-- Elevation: **15%**
-- Moving time: **15%**
-- Heart-rate efficiency: **20%**
-
-Heart-rate efficiency is based on average speed divided by average heart rate when both values are available. Missing HR values are estimated from the other ride features when enough historical data exists; otherwise a neutral score is used.
-
-CFI is intended for personal longitudinal comparison. It is **not** a medical, diagnostic, or clinical fitness score.
+- **Mean and median** use recorded ride distances; rows with a missing distance are excluded.
+- **Mode** groups distances to the nearest 0.1 km and displays a value only when it is the unique most common repeated distance.
+- **Weekly and monthly averages** divide the recorded distance total by the number of active calendar weeks or months in the selected scope.
+- **Seven-day average** is the total distance from today and the previous six local calendar days divided by seven, so rest days count as zero-distance days.
+- **Calendar heat** sums moving time for each day. If moving time is missing, elapsed time is used for that ride.
 
 ### Rolling progression
 
@@ -216,7 +210,7 @@ The progression view uses the current ride and up to nine previous rides. This r
 
 ### Data quality
 
-Missing values are preserved as missing rather than silently converted to zero. The rail reports coverage for the core fields used by CFI and the optional source time field.
+Missing values are preserved as missing rather than silently converted to zero. The rail reports coverage for distance, elevation, heart rate, moving time, and optional start time.
 
 ---
 
@@ -269,10 +263,9 @@ The frontend never receives the Google OAuth client secret.
 The dashboard works in modern evergreen browsers. Enhancements are progressive:
 
 - View Transitions are used when supported.
-- WebGPU is optional and falls back to the CSS ambient background.
 - `prefers-reduced-motion` disables nonessential animation.
 - Focus-visible outlines, semantic landmarks, labels, and Escape-to-close behavior are included.
-- Charts expose labels/tooltips and remain understandable without GPU support.
+- Charts expose labels/tooltips and remain understandable without animation.
 
 ---
 
@@ -297,10 +290,6 @@ Then use **Sync** in the top bar.
 ### Hour-of-day is blank
 
 This is expected when column A contains dates without clock times. Add a time to the source date or add a dedicated time column and extend the normalizer before relying on that view.
-
-### WebGPU shows fallback
-
-WebGPU is decorative only. The dashboard does not depend on GPU support. Check browser hardware acceleration settings if you want the ambient renderer.
 
 ---
 
