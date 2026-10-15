@@ -45,8 +45,18 @@ type Page =
 
 type Scope = "year" | "all";
 type Theme = "light" | "dark";
+type Palette = "ember" | "ocean" | "forest" | "lavender" | "rose" | "citrus";
 type SortKey = "date" | "distance" | "speed" | "elevation" | "hr";
 type ToastKind = "success" | "info" | "error";
+
+const PALETTES: { id: Palette; label: string; colors: [string, string, string] }[] = [
+  { id: "ember", label: "Ember", colors: ["#d83f31", "#e96545", "#8f3a4b"] },
+  { id: "ocean", label: "Ocean", colors: ["#087e8b", "#35a7a0", "#4267a8"] },
+  { id: "forest", label: "Forest", colors: ["#477a54", "#8a9a45", "#427c78"] },
+  { id: "lavender", label: "Lavender", colors: ["#7757b4", "#a36eb9", "#547db2"] },
+  { id: "rose", label: "Rose", colors: ["#b33d72", "#dd6f78", "#8456a6"] },
+  { id: "citrus", label: "Citrus", colors: ["#aa7414", "#d39832", "#668a43"] }
+];
 
 type GoalValues = {
   distanceKm: number;
@@ -74,6 +84,7 @@ type AppState = {
   favorites: Set<string>;
   goals: GoalValues;
   theme: Theme;
+  palette: Palette;
   menuOpen: boolean;
   toast: { message: string; kind: ToastKind } | null;
 };
@@ -220,7 +231,8 @@ const ICON_PATHS: Record<string, string> = {
 const STORAGE_KEYS = {
   favorites: "ridescope-favorites",
   goals: "ridescope-goals",
-  theme: "ridescope-theme"
+  theme: "ridescope-theme",
+  palette: "ridescope-palette"
 };
 
 const defaultGoals: GoalValues = { distanceKm: 500, rides: 30, elevationM: 5000 };
@@ -259,10 +271,20 @@ function readTheme(): Theme {
   }
 }
 
-function applyTheme(theme: Theme): void {
+function readPalette(): Palette {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.palette);
+    return PALETTES.some(palette => palette.id === saved) ? saved as Palette : "ember";
+  } catch {
+    return "ember";
+  }
+}
+
+function applyTheme(theme: Theme, palette: Palette): void {
   document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.palette = palette;
   const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-  if (themeColor) themeColor.content = theme === "dark" ? "#111820" : "#f6f3f0";
+  if (themeColor) themeColor.content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || (theme === "dark" ? "#111820" : "#f6f3f0");
 }
 
 function pageFromHash(): Page {
@@ -296,6 +318,7 @@ const state: AppState = {
   favorites: readFavorites(),
   goals: readStoredGoals(),
   theme: readTheme(),
+  palette: readPalette(),
   menuOpen: false,
   toast: null
 };
@@ -606,6 +629,7 @@ function renderTopbar(): string {
     <div class="topbar-actions">
       ${state.dataset && state.dataset.years.length ? `<div class="scope-toggle" role="group" aria-label="Data scope"><button class="${state.scope === "year" ? "is-active" : ""}" data-scope="year">Year</button><button class="${state.scope === "all" ? "is-active" : ""}" data-scope="all">All time</button></div>${scopeYearOptions()}` : ""}
       ${state.dataset ? `<button class="button button--sync ${state.syncing ? "is-syncing" : ""}" data-action="sync" ${state.syncing ? "disabled" : ""}>${icon("sync", 15)}<span>${state.syncing ? "Syncing" : "Sync"}</span></button>` : ""}
+      <details class="palette-picker"><summary class="palette-trigger" aria-label="Choose color palette" title="Choose color palette"><span class="palette-trigger-swatches" aria-hidden="true"><i></i><i></i><i></i></span><span>Palette</span></summary><div class="palette-options" role="group" aria-label="Color palette">${PALETTES.map(palette => `<button class="palette-option ${state.palette === palette.id ? "is-selected" : ""}" data-action="set-palette" data-palette="${palette.id}" aria-pressed="${state.palette === palette.id}"><span class="palette-option-swatches" aria-hidden="true" style="--swatch-one:${palette.colors[0]};--swatch-two:${palette.colors[1]};--swatch-three:${palette.colors[2]}"><i></i><i></i><i></i></span><span>${palette.label}</span></button>`).join("")}</div></details>
       <button class="icon-button theme-toggle" data-action="toggle-theme" aria-label="Switch to ${nextTheme} theme" title="Switch to ${nextTheme} theme">${icon(nextTheme === "dark" ? "moon" : "sun", 17)}</button>
       <div class="topbar-avatar" aria-label="Connected profile">RS</div>
     </div>
@@ -823,10 +847,12 @@ function calendarView(): string {
     byDate.set(ride.date, list);
   });
   const durations = new Map<string, number>();
+  const distances = new Map<string, number>();
   byDate.forEach((dayRides, date) => {
     durations.set(date, sum(dayRides.map(rideDurationHours)));
+    distances.set(date, sum(dayRides.map(ride => ride.distance)));
   });
-  const maxDuration = Math.max(1, ...durations.values());
+  const maxDistance = Math.max(1, ...distances.values());
   const months = Array.from({ length: 12 }, (_, monthIndex) => {
     const month = monthIndex + 1;
     const first = new Date(year, monthIndex, 1);
@@ -838,20 +864,21 @@ function calendarView(): string {
       const key = dateKey(new Date(year, monthIndex, day));
       const dayRides = byDate.get(key) ?? [];
       const duration = durations.get(key) ?? 0;
-      const intensity = duration / maxDuration;
-      const distance = sum(dayRides.map(ride => ride.distance));
+      const distance = distances.get(key) ?? 0;
+      const intensity = distance / maxDistance;
       const time = duration ? fmt.hours(duration) : "No riding time";
-      const tooltip = `${fmt.date(key)}\n${dayRides.length ? `${time} · ${fmt.n(dayRides.length)} ride${dayRides.length === 1 ? "" : "s"} · ${fmt.km(distance)}` : "No ride recorded"}`;
-      const marker = duration < 1 ? `${Math.round(duration * 60)}m` : `${fmt.n(duration, 1)}h`;
-      cells += `<button class="calendar-cell ${dayRides.length ? `has-rides ${intensity > 0.62 ? "is-intense" : ""}` : ""}" style="--heat:${duration ? 0.12 + intensity * 0.82 : 0}" data-day="${key}" data-tooltip="${escapeHtml(tooltip)}" aria-label="${escapeHtml(`${fmt.date(key)} · ${dayRides.length ? time : "No ride recorded"}`)}"><span>${day}</span>${dayRides.length ? `<b>${marker}</b>` : ""}</button>`;
+      const tooltip = `${fmt.date(key)}\n${dayRides.length ? `${fmt.km(distance)} · ${fmt.n(dayRides.length)} ride${dayRides.length === 1 ? "" : "s"} · ${time}` : "No ride recorded"}`;
+      const marker = fmt.n(distance, 0);
+      cells += `<button class="calendar-cell ${dayRides.length ? `has-rides ${intensity > 0.62 ? "is-intense" : ""}` : ""}" style="--heat:${distance ? 0.12 + intensity * 0.82 : 0}" data-day="${key}" data-tooltip="${escapeHtml(tooltip)}" aria-label="${escapeHtml(`${fmt.date(key)} · ${dayRides.length ? `${fmt.km(distance)}, ${fmt.n(dayRides.length)} ride${dayRides.length === 1 ? "" : "s"}` : "No ride recorded"}`)}"><span>${day}</span>${dayRides.length ? `<b>${marker}</b>` : ""}</button>`;
     }
-    const monthHours = [...durations.entries()].filter(([date]) => date.startsWith(`${year}-${String(month).padStart(2, "0")}`)).reduce((total, [, hours]) => total + hours, 0);
-    return `<div class="month-block"><div class="month-heading"><strong>${first.toLocaleDateString(undefined, { month: "long" })}</strong><span>${monthHours ? fmt.hours(monthHours) : "—"}</span></div><div class="weekday-row">${["M", "T", "W", "T", "F", "S", "S"].map(day => `<span>${day}</span>`).join("")}</div><div class="calendar-grid">${cells}</div></div>`;
+    const monthDistance = [...distances.entries()].filter(([date]) => date.startsWith(`${year}-${String(month).padStart(2, "0")}`)).reduce((total, [, km]) => total + km, 0);
+    return `<div class="month-block"><div class="month-heading"><strong>${first.toLocaleDateString(undefined, { month: "long" })}</strong><span>${monthDistance ? fmt.km(monthDistance) : "—"}</span></div><div class="weekday-row">${["M", "T", "W", "T", "F", "S", "S"].map(day => `<span>${day}</span>`).join("")}</div><div class="calendar-grid">${cells}</div></div>`;
   }).join("");
   const totalHours = sum([...durations.values()]);
+  const totalDistance = sum(rides.map(ride => ride.distance));
   return `<div class="page-stack">
-    ${pageHeader(`${year} · ${fmt.n(rides.length)} rides`, "Your year in movement", "Every square measures ride time. Select a date to open the full ride details.", `<div class="calendar-legend"><span class="legend-label">Less time</span><i class="legend-swatch"></i><i class="legend-swatch legend-swatch--mid"></i><i class="legend-swatch legend-swatch--high"></i><span class="legend-label">More time</span></div>`)}
-    <section class="panel calendar-panel reveal reveal--delay-1"><div class="calendar-toolbar"><div><div class="eyebrow">Annual map · moving time</div><h2>${year} riding calendar</h2></div><div class="calendar-stat"><strong>${fmt.n(byDate.size)}</strong><span>active days</span></div><div class="calendar-stat"><strong>${fmt.hours(totalHours)}</strong><span>total ride time</span></div><div class="calendar-stat"><strong>${fmt.km(sum(rides.map(ride => ride.distance)))}</strong><span>total distance</span></div></div><div class="calendar-months">${months}</div></section>
+    ${pageHeader(`${year} · ${fmt.n(rides.length)} rides`, "Your year in movement", "Every square measures the total distance ridden that day. Select a date to open the full ride details.", `<div class="calendar-legend"><span class="legend-label">Less distance</span><i class="legend-swatch"></i><i class="legend-swatch legend-swatch--mid"></i><i class="legend-swatch legend-swatch--high"></i><span class="legend-label">More distance</span></div>`)}
+    <section class="panel calendar-panel reveal reveal--delay-1"><div class="calendar-toolbar"><div><div class="eyebrow">Annual map · daily distance</div><h2>${year} riding calendar</h2></div><div class="calendar-stat"><strong>${fmt.n(byDate.size)}</strong><span>active days</span></div><div class="calendar-stat"><strong>${fmt.hours(totalHours)}</strong><span>total ride time</span></div><div class="calendar-stat"><strong>${fmt.km(totalDistance)}</strong><span>total distance</span></div></div><div class="calendar-months">${months}</div></section>
   </div>`;
 }
 
@@ -1234,13 +1261,25 @@ function handleClick(event: MouseEvent): void {
     mountShell();
   } else if (action === "toggle-theme") {
     state.theme = state.theme === "light" ? "dark" : "light";
-    applyTheme(state.theme);
+    applyTheme(state.theme, state.palette);
     try {
       localStorage.setItem(STORAGE_KEYS.theme, state.theme);
     } catch {
       // The theme still applies for this page when browser storage is unavailable.
     }
     mountShell();
+  } else if (action === "set-palette") {
+    const palette = target.closest<HTMLElement>("[data-palette]")?.dataset.palette;
+    if (PALETTES.some(option => option.id === palette)) {
+      state.palette = palette as Palette;
+      applyTheme(state.theme, state.palette);
+      try {
+        localStorage.setItem(STORAGE_KEYS.palette, state.palette);
+      } catch {
+        // The palette still applies for this page when browser storage is unavailable.
+      }
+      mountShell();
+    }
   } else if (action === "close-menu") {
     state.menuOpen = false;
     mountShell();
@@ -1355,6 +1394,6 @@ document.addEventListener("keydown", handleKeydown);
 window.addEventListener("popstate", handlePopState);
 window.addEventListener("hashchange", handlePopState);
 
-applyTheme(state.theme);
+applyTheme(state.theme, state.palette);
 mountShell();
 void loadData();

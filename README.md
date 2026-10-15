@@ -11,7 +11,7 @@ It turns a simple Sheet into a clear command center for distance, climbing, cons
 RideScope currently includes:
 
 - **Overview command center** with key stats, interactive weekly distance bars, seasonal rhythm, recent rides, and personal records.
-- **Interactive annual calendar** whose red heatmap measures daily ride time; selecting a date opens a shareable ride-details page.
+- **Interactive annual calendar** whose heatmap intensity and monthly totals measure distance ridden; selecting a date opens a shareable ride-details page.
 - **Distance analytics** with mean, median, mode, active-week and active-month averages, and a seven-day daily average through today.
 - **Bike analysis** with distance share, ride counts, average distance per ride, speed, elevation, and bike-specific ride filtering.
 - **Consistency analysis** with current and historical 3+ day streaks.
@@ -28,7 +28,7 @@ The application is intentionally dependency-light: the charts and interaction la
 
 ## Visual system
 
-RideScope uses a vermilion visual language in both light and dark themes. Light mode uses warm white surfaces and charcoal text; dark mode uses deep charcoal surfaces and lighter text. A theme toggle in the top bar switches modes, and the selected theme is saved in this browser. Layouts reflow for phone screens, with touch-sized controls and scrollable data tables.
+RideScope includes light and dark modes plus six selectable accent palettes: Ember, Ocean, Forest, Lavender, Rose, and Citrus. Use the palette menu and the light/dark toggle in the top bar to customize the dashboard; both preferences are saved in this browser. Layouts reflow for phone screens, with touch-sized controls and scrollable data tables.
 
 The interface uses Google Sans from Google Fonts throughout, with system sans-serif fallbacks if the font cannot load.
 
@@ -247,7 +247,7 @@ Both `DD/MM/YYYY` and `YYYY-MM-DD` date prefixes are recognized. Dates are parse
 - **Mode** groups distances to the nearest 0.1 km and displays a value only when it is the unique most common repeated distance.
 - **Weekly and monthly averages** divide the recorded distance total by the number of active calendar weeks or months in the selected scope.
 - **Seven-day average** is the total distance from today and the previous six local calendar days divided by seven, so rest days count as zero-distance days.
-- **Calendar heat** sums moving time for each day. If moving time is missing, elapsed time is used for that ride.
+- **Calendar heat** compares each day’s total recorded ride distance with the longest-distance day in the selected year. Month totals also show distance; moving time remains available in the day details.
 
 ### Rolling progression
 
@@ -266,6 +266,7 @@ The following preferences are stored in `localStorage` and never leave the brows
 - Favorite ride IDs
 - Personal goal targets
 - Light or dark theme preference
+- Color palette preference
 
 The current page is represented in the URL hash, so browser Back/Forward navigation works between dashboard views.
 
