@@ -62,6 +62,7 @@ Vite browser UI + SVG/CSS visualizations
 ```text
 .
 ├── index.html                 Browser entry document
+├── index.js                   Vercel Express function entry point
 ├── PROJECT_CONTEXT.md         Durable product and implementation context
 ├── server/index.js            OAuth, Sheet API, session, production server
 ├── src/
@@ -72,6 +73,7 @@ Vite browser UI + SVG/CSS visualizations
 │   └── types.ts               Shared domain types
 ├── .env.example               Safe configuration template
 ├── package.json               Development and build scripts
+├── vercel.json                Vercel build configuration
 └── vite.config.ts             Vite + Tailwind + development proxy
 ```
 
@@ -166,7 +168,24 @@ Start the combined server:
 npm start
 ```
 
-The production Express server serves both `dist/` and the API from one origin. The `start` script is cross-platform and sets `NODE_ENV=production` before loading the server.
+The production Express server serves both `public/` and the API from one origin. The `start` script is cross-platform and sets `NODE_ENV=production` before loading the server. Vercel serves the Vite build from `public/` through its CDN and runs the root Express export as a serverless function.
+
+### Deploying to Vercel
+
+Import the GitHub repository in Vercel and select the `feature/ember-red-ui` branch for the first deployment. The included `vercel.json` selects the Express runtime and runs the production Vite build.
+
+Set these environment variables in the Vercel project for the deployment environments you use:
+
+```dotenv
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=https://your-project.vercel.app/oauth2callback
+SESSION_SECRET=...
+STRAVA_SHEET_ID=...
+STRAVA_SHEET_RANGE=
+```
+
+Add the deployed callback URL to the Google OAuth client's authorized redirect URIs. OAuth tokens and authorization state are held in a short-lived, authenticated-encryption cookie, so sign-in does not depend on serverless instance memory. Keep `SESSION_SECRET` stable across deployments; rotating it signs out existing sessions.
 
 ---
 
@@ -244,14 +263,12 @@ API responses are marked `no-store` so a sync does not get confused with a cache
 
 ## Privacy and production hardening
 
-The default development setup uses Express’s in-memory session store. Before deploying publicly:
+The application encrypts OAuth session data into a short-lived, HTTP-only cookie. Before deploying publicly:
 
 - Store `SESSION_SECRET` in a secret manager.
-- Replace the in-memory session store with Redis, Postgres, or another durable store.
 - Restrict the OAuth consent screen to the intended account or Workspace domain.
 - Use HTTPS and set the production environment securely.
 - Keep `.env` out of source control; it is already ignored.
-- Consider encrypting OAuth tokens if they are moved out of the session store.
 - Add rate limiting and centralized request logging at the deployment edge.
 
 The frontend never receives the Google OAuth client secret.
@@ -273,7 +290,7 @@ The dashboard works in modern evergreen browsers. Enhancements are progressive:
 
 ### The app asks to connect again
 
-The OAuth session may have expired or the server may have restarted while using the in-memory session store. Sign in again, or configure a durable session store for production.
+The OAuth session expires after 12 hours or if `SESSION_SECRET` changes. Sign in again to create a new session.
 
 ### The Sheet loads but no rides appear
 

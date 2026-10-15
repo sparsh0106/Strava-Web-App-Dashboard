@@ -3,6 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [tailwindcss()],
+  publicDir: false,
   server: {
     port: 5173,
     proxy: {
@@ -14,6 +15,8 @@ export default defineConfig({
   },
   build: {
     target: "baseline-widely-available",
-    sourcemap: false
+    sourcemap: false,
+    outDir: "public",
+    emptyOutDir: true
   }
 });

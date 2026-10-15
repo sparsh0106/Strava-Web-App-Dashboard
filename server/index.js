@@ -1,7 +1,6 @@
 import "dotenv/config";
 import crypto from "node:crypto";
 import express from "express";
-import session from "express-session";
 import { google } from "googleapis";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +11,11 @@ const PORT = Number(process.env.PORT || 8787);
 const SHEET_ID = process.env.STRAVA_SHEET_ID;
 const RANGE_OVERRIDE = process.env.STRAVA_SHEET_RANGE || "";
 const SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"];
+const SESSION_COOKIE = "ridescope_session";
+const SESSION_MAX_AGE = 60 * 60 * 12;
+const SESSION_KEY = crypto.createHash("sha256")
+  .update(process.env.SESSION_SECRET || "development-only-secret")
+  .digest();
 
 if (
   !process.env.GOOGLE_CLIENT_ID ||
@@ -32,17 +36,80 @@ const oauth2 = new google.auth.OAuth2(
 const app = express();
 app.set("trust proxy", 1);
 
-app.use(session({
-  secret: process.env.SESSION_SECRET || "development-only-secret",
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    maxAge: 1000 * 60 * 60 * 12
+function readSession(cookieHeader = "") {
+  const cookie = cookieHeader
+    .split(";")
+    .map(value => value.trim())
+    .find(value => value.startsWith(`${SESSION_COOKIE}=`));
+  if (!cookie) return {};
+
+  try {
+    const payload = Buffer.from(cookie.slice(SESSION_COOKIE.length + 1), "base64url");
+    if (payload.length < 30) return {};
+    const decipher = crypto.createDecipheriv("aes-256-gcm", SESSION_KEY, payload.subarray(0, 12));
+    decipher.setAuthTag(payload.subarray(12, 28));
+    const plaintext = Buffer.concat([
+      decipher.update(payload.subarray(28)),
+      decipher.final()
+    ]);
+    const sessionData = JSON.parse(plaintext.toString("utf8"));
+    if (
+      !sessionData ||
+      typeof sessionData !== "object" ||
+      Array.isArray(sessionData) ||
+      typeof sessionData._expiresAt !== "number" ||
+      sessionData._expiresAt <= Date.now()
+    ) return {};
+    delete sessionData._expiresAt;
+    return sessionData;
+  } catch {
+    return {};
   }
-}));
+}
+
+function writeSession(res, sessionData, destroyed, hadCookie) {
+  const secure = process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL);
+  const attributes = `Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
+  if (destroyed || Object.keys(sessionData).length === 0) {
+    if (destroyed || hadCookie) {
+      res.append("Set-Cookie", `${SESSION_COOKIE}=; ${attributes}; Max-Age=0`);
+    }
+    return;
+  }
+
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", SESSION_KEY, iv);
+  const sessionPayload = { ...sessionData, _expiresAt: Date.now() + SESSION_MAX_AGE * 1000 };
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(sessionPayload), "utf8"),
+    cipher.final()
+  ]);
+  const payload = Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString("base64url");
+  res.append("Set-Cookie", `${SESSION_COOKIE}=${payload}; ${attributes}; Max-Age=${SESSION_MAX_AGE}`);
+}
+
+app.use((req, res, next) => {
+  const hadCookie = req.headers.cookie?.split(";")
+    .some(value => value.trim().startsWith(`${SESSION_COOKIE}=`)) ?? false;
+  const sessionData = readSession(req.headers.cookie);
+  let destroyed = false;
+  req.session = sessionData;
+  Object.defineProperty(req.session, "destroy", {
+    enumerable: false,
+    value: callback => {
+      destroyed = true;
+      for (const key of Object.keys(sessionData)) delete sessionData[key];
+      callback?.(null);
+    }
+  });
+
+  const end = res.end;
+  res.end = function (...args) {
+    if (!res.headersSent) writeSession(res, sessionData, destroyed, hadCookie);
+    return end.apply(this, args);
+  };
+  next();
+});
 
 function noStore(res) {
   res.set("Cache-Control", "no-store");
@@ -155,22 +222,27 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, sheetConfigured: Boolean(SHEET_ID) });
 });
 
-// Serve the Vite production build when the app is started in production mode.
-app.use(express.static(path.join(ROOT, "dist")));
+// Vercel serves the Vite output through its CDN; local production still serves
+// the frontend from this Express process.
+if (!process.env.VERCEL) {
+  app.use(express.static(path.join(ROOT, "public")));
 
-app.use((req, res, next) => {
-  if (req.method !== "GET") return next();
-  if (
-    req.path.startsWith("/api/") ||
-    req.path.startsWith("/auth/") ||
-    req.path === "/oauth2callback" ||
-    req.path === "/logout"
-  ) {
-    return next();
-  }
-  return res.sendFile(path.join(ROOT, "dist", "index.html"));
-});
+  app.use((req, res, next) => {
+    if (req.method !== "GET") return next();
+    if (
+      req.path.startsWith("/api/") ||
+      req.path.startsWith("/auth/") ||
+      req.path === "/oauth2callback" ||
+      req.path === "/logout"
+    ) {
+      return next();
+    }
+    return res.sendFile(path.join(ROOT, "public", "index.html"));
+  });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`RideScope server listening on port ${PORT}`);
-});
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`RideScope server listening on port ${PORT}`);
+  });
+}
+
+export default app;
