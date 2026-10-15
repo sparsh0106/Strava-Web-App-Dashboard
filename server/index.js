@@ -1,12 +1,15 @@
-import "dotenv/config";
 import crypto from "node:crypto";
+import dotenv from "dotenv";
 import express from "express";
 import { google } from "googleapis";
+import { ExternalAccountClient } from "google-auth-library";
+import { getVercelOidcToken } from "@vercel/oidc";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
+dotenv.config({ path: [path.join(ROOT, ".env.local"), path.join(ROOT, ".env")] });
 const PORT = Number(process.env.PORT || 8787);
 const SHEET_ID = process.env.STRAVA_SHEET_ID;
 const RANGE_OVERRIDE = process.env.STRAVA_SHEET_RANGE || "";
@@ -14,8 +17,16 @@ const SIGNIN_LOG_SHEET_ID = process.env.SIGNIN_LOG_SHEET_ID;
 const SIGNIN_LOG_RANGE = process.env.SIGNIN_LOG_SHEET_RANGE || "'Sign-ins'!A:B";
 const IDENTITY_SCOPES = ["openid", "email"];
 const SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
-const SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-const SERVICE_ACCOUNT_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+const SERVICE_ACCOUNT_EMAIL = process.env.GCP_SERVICE_ACCOUNT_EMAIL;
+const GCP_PROJECT_NUMBER = process.env.GCP_PROJECT_NUMBER;
+const WIF_POOL_ID = process.env.GCP_WORKLOAD_IDENTITY_POOL_ID;
+const WIF_PROVIDER_ID = process.env.GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID;
+const WIF_CONFIGURED = Boolean(
+  SERVICE_ACCOUNT_EMAIL && GCP_PROJECT_NUMBER && WIF_POOL_ID && WIF_PROVIDER_ID
+);
+const WIF_PROVIDER_RESOURCE = WIF_CONFIGURED
+  ? `projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL_ID}/providers/${WIF_PROVIDER_ID}`
+  : null;
 const SESSION_COOKIE = "ridescope_session";
 const SESSION_MAX_AGE = 60 * 60 * 12;
 const SESSION_KEY = crypto.createHash("sha256")
@@ -29,10 +40,9 @@ if (
   !process.env.SESSION_SECRET ||
   !SHEET_ID ||
   !SIGNIN_LOG_SHEET_ID ||
-  !SERVICE_ACCOUNT_EMAIL ||
-  !SERVICE_ACCOUNT_KEY
+  !WIF_CONFIGURED
 ) {
-  console.warn("Missing Google OAuth, service account, ride Sheet, or sign-in log configuration. See .env.example.");
+  console.warn("Missing Google OAuth, workload identity, ride Sheet, or sign-in log configuration. See .env.example.");
 }
 
 const oauth2 = new google.auth.OAuth2(
@@ -40,11 +50,19 @@ const oauth2 = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_SECRET,
   process.env.GOOGLE_REDIRECT_URI
 );
-const serviceAccount = SERVICE_ACCOUNT_EMAIL && SERVICE_ACCOUNT_KEY
-  ? new google.auth.JWT({
-      email: SERVICE_ACCOUNT_EMAIL,
-      key: SERVICE_ACCOUNT_KEY,
-      scopes: SHEETS_SCOPES
+const serviceAccount = WIF_CONFIGURED
+  ? ExternalAccountClient.fromJSON({
+      type: "external_account",
+      audience: `//iam.googleapis.com/${WIF_PROVIDER_RESOURCE}`,
+      subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
+      token_url: "https://sts.googleapis.com/v1/token",
+      service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SERVICE_ACCOUNT_EMAIL}:generateAccessToken`,
+      scopes: SHEETS_SCOPES,
+      subject_token_supplier: {
+        getSubjectToken: () => getVercelOidcToken({
+          audience: `https://iam.googleapis.com/${WIF_PROVIDER_RESOURCE}`
+        })
+      }
     })
   : null;
 

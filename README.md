@@ -94,37 +94,50 @@ The cycling data Sheet is read-only from the application’s perspective. A sepa
 ## Google Cloud, service account, and sign-in setup
 
 1. Create or select a Google Cloud project.
-2. Enable the **Google Sheets API**.
-3. Create a service account for the server and create a JSON key. Keep its private key secret; it belongs only in the server environment.
+2. Enable the **Google Sheets API**, **Security Token Service API**, and **IAM Service Account Credentials API** in that project.
+3. Create a dedicated service account for this app. Do not create a JSON key; the app uses Vercel Workload Identity Federation (WIF) to impersonate the service account with short-lived credentials.
 4. Create two spreadsheets in the owner account:
    - Share the cycling data spreadsheet with the service account email as **Viewer**.
    - Create a separate sign-in log spreadsheet, share it with the service account email as **Editor**, and add a tab named `Sign-ins` with headers `Email` and `Signed in at (UTC)` in columns A and B.
 
    Keep these as separate spreadsheet files so the service account cannot write to the cycling data file.
 
-5. Configure the OAuth consent screen for external users and create an OAuth 2.0 client ID with application type **Web application**. While the consent screen is in testing mode, only its configured test users can sign in.
-6. Add this local redirect URI:
+5. Configure Vercel OIDC and a Google Cloud workload identity pool/provider:
+   - In the Vercel project, open **Settings → Security → Secure backend access with OpenID Connect (OIDC) federation** and enable it. Use the Team issuer mode when available; note the exact issuer URL shown there.
+   - In Google Cloud, open **IAM & Admin → Workload Identity Federation** and create a pool and an **OpenID Connect (OIDC)** provider. Use Vercel's exact issuer URL, leave the JWK file empty, and configure the provider's default audience.
+   - Set the provider's attribute mapping to `google.subject=assertion.sub`.
+   - Copy the provider's default audience URL. The server requests this audience from Vercel and uses it to exchange the Vercel token for a short-lived Google access token.
+   - Create a service account for this app if you have not already. On that service account, grant **Workload Identity User** (`roles/iam.workloadIdentityUser`) to the exact Vercel production subject `owner:YOUR_VERCEL_TEAM_SLUG:project:sparsh_rides:environment:production`. Replace the team slug and project slug with the values in your Vercel subject. Keep this binding limited to this project and environment; do not grant the whole pool access.
+
+   Vercel documents the issuer URL, default audience, and subject format in its [GCP OIDC setup guide](https://vercel.com/docs/oidc/gcp). Google requires the `roles/iam.workloadIdentityUser` role for a federated identity to impersonate a service account.
+
+6. Configure the OAuth consent screen for external users and create an OAuth 2.0 client ID with application type **Web application**. While the consent screen is in testing mode, only its configured test users can sign in.
+7. Add this local redirect URI:
 
    ```text
    http://localhost:8787/oauth2callback
    ```
 
-7. Copy `.env.example` to `.env` and fill in the OAuth client, service-account, and spreadsheet values:
+8. Copy `.env.example` to `.env` and fill in the OAuth client, WIF, and spreadsheet values:
 
    ```dotenv
    GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
    GOOGLE_CLIENT_SECRET=your-client-secret
    GOOGLE_REDIRECT_URI=http://localhost:8787/oauth2callback
    SESSION_SECRET=use-a-long-random-value
-   GOOGLE_SERVICE_ACCOUNT_EMAIL=ridescope-server@your-project.iam.gserviceaccount.com
-   GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+   GCP_SERVICE_ACCOUNT_EMAIL=ridescope-server@your-project.iam.gserviceaccount.com
+   GCP_PROJECT_NUMBER=123456789012
+   GCP_WORKLOAD_IDENTITY_POOL_ID=vercel
+   GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID=vercel
    STRAVA_SHEET_ID=your-cycling-data-spreadsheet-id
    STRAVA_SHEET_RANGE=
    SIGNIN_LOG_SHEET_ID=your-separate-sign-in-log-spreadsheet-id
    SIGNIN_LOG_SHEET_RANGE='Sign-ins'!A:B
    ```
 
-Visitors grant only the `openid` and `email` identity scopes. Their Google accounts do not need access to either spreadsheet. The server verifies the ID token and verified-email claim, records `[email, ISO-8601 UTC timestamp]` in the log spreadsheet, and then creates the session. If logging fails, sign-in is not completed. OAuth client secrets and the service-account key are only read by the Node server and are never bundled into the Vite frontend.
+For local WIF development, link the checkout with the Vercel CLI and run `vercel env pull .env.local`. The `.env.local` file is ignored by Git. Allow the exact Vercel `development` subject to impersonate a development service account if local API access is needed; the production-only subject above intentionally does not authorize local development.
+
+Visitors grant only the `openid` and `email` identity scopes. Their Google accounts do not need access to either spreadsheet. The server verifies the ID token and verified-email claim, records `[email, ISO-8601 UTC timestamp]` in the log spreadsheet, and then creates the session. If logging fails, sign-in is not completed. OAuth client secrets and WIF settings are only read by the Node server and are never bundled into the Vite frontend. Google Sheets access uses the dedicated service account, while Vercel OIDC replaces a long-lived service-account key with short-lived credentials.
 
 ---
 
@@ -188,8 +201,10 @@ GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 GOOGLE_REDIRECT_URI=https://your-project.vercel.app/oauth2callback
 SESSION_SECRET=...
-GOOGLE_SERVICE_ACCOUNT_EMAIL=...
-GOOGLE_PRIVATE_KEY=...
+GCP_SERVICE_ACCOUNT_EMAIL=...
+GCP_PROJECT_NUMBER=...
+GCP_WORKLOAD_IDENTITY_POOL_ID=...
+GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID=...
 STRAVA_SHEET_ID=...
 STRAVA_SHEET_RANGE=
 SIGNIN_LOG_SHEET_ID=...
