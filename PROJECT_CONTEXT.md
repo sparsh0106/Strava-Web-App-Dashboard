@@ -2,11 +2,11 @@
 
 ## Product
 
-RideScope is a private cycling dashboard. It reads a Strava activity export from a Google Sheet through a Node/Express server. Google OAuth and Sheets access stay on the server; the browser receives normalized ride rows and calculates analytics locally. The Sheet is read-only.
+RideScope is a cycling dashboard for a Strava activity export in the site owner's Google Sheet. Visitors sign in with their own Google accounts using identity-only OAuth scopes. A server-owned service account reads the owner's ride Sheet and appends each successful visitor sign-in (verified email and UTC timestamp) to a separate log spreadsheet. The browser receives ride rows and calculates analytics locally; it never receives Google API credentials.
 
 ## Architecture and key files
 
-- `server/index.js` handles OAuth, sessions, health checks, and Google Sheets reads.
+- `server/index.js` verifies Google ID tokens, handles encrypted sessions, appends sign-in rows, reads the cycling Sheet with a server service account, and serves health checks.
 - Root `index.js` exports the Express app to Vercel; `vercel.json` runs the build.
 - Vite writes production assets to `public/` for Vercel's static asset CDN.
 - `src/sheets.ts` calls the app API and normalizes the returned dataset boundary.
@@ -35,8 +35,8 @@ The default source is columns `A:K`: date/time, elapsed time, moving time, dista
 
 Use a warm light surface or a charcoal dark surface with a vermilion red accent. Google Sans is used throughout, including compact numerical labels. The light/dark theme toggle persists the user's choice in browser `localStorage`; light is the default. Layouts should reflow for phones, preserve keyboard focus states, and respect reduced-motion settings. Keep cycling performance views centered on the recorded activity metrics and distance summaries.
 
-Favorites and personal goals stay in browser `localStorage`. Never commit `.env` or credentials. The Vite client proxies API routes to the Express server during development.
+Favorites, personal goals, and theme preference stay in browser `localStorage`. Never commit `.env`, OAuth secrets, or the Google service-account private key. Share the cycling spreadsheet with the service account as Viewer and use a separate spreadsheet for sign-in logs, shared as Editor. The Vite client proxies API routes to the Express server during development.
 
 ## Vercel deployment
 
-The `sparsh_rides` Vercel project uses `feature/ember-red-ui` as its Production Branch. The serverless-compatible session middleware keeps OAuth state and tokens in an authenticated-encryption, HTTP-only cookie, keyed by `SESSION_SECRET`; this avoids relying on instance memory. Configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `SESSION_SECRET`, and `STRAVA_SHEET_ID` in the Vercel project, then authorize `https://<deployment-host>/oauth2callback` as a redirect URI in the Google OAuth client. Do not put secrets in source control or build output.
+The `sparsh_rides` Vercel project uses `feature/ember-red-ui` as its Production Branch. The serverless-compatible session middleware keeps OAuth state, nonce, and verified identity in an authenticated-encryption, HTTP-only cookie, keyed by `SESSION_SECRET`; this avoids relying on instance memory. Configure the OAuth client, service-account email/private key, cycling Sheet ID, and separate sign-in log Sheet ID in Vercel. Share the cycling Sheet with the service account as Viewer and the log Sheet as Editor. Authorize `https://<deployment-host>/oauth2callback` as a redirect URI in the Google OAuth client. Do not put secrets in source control or build output.

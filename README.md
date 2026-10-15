@@ -1,8 +1,8 @@
 # RideScope
 
-**RideScope** is a private, interactive cycling analytics dashboard for a Strava activity export stored in a personal Google Sheet.
+**RideScope** is an interactive cycling analytics dashboard for a Strava activity export stored in the site owner's Google Sheet. Visitors sign in with their own Google accounts; the app uses a server-owned service account to read ride data and log each successful sign-in.
 
-It turns a simple Sheet into a clear command center for distance, climbing, consistency, performance, bike usage, and ride-level exploration. The Google OAuth exchange and Sheet API calls stay on the Node server; the browser only receives the rows needed to calculate local analytics.
+It turns a simple Sheet into a clear command center for distance, climbing, consistency, performance, bike usage, and ride-level exploration. Google identity verification and all Sheet API calls stay on the Node server; the browser only receives the rows needed to calculate local analytics. The sign-in screen discloses that successful sign-ins are logged with a verified email and UTC time, and that signed-in visitors can view the dashboard's ride data.
 
 ---
 
@@ -39,19 +39,22 @@ Compact numerical labels use tabular numerals to keep measurements aligned.
 ## Architecture
 
 ```text
-Google OAuth
-     │
-     ▼
-Node/Express server ── Google Sheets API (read-only)
-     │
-     ▼
-Normalized ride rows
-     │
-     ▼
-TypeScript analytics engine
-     │
-     ▼
-Vite browser UI + SVG/CSS visualizations
+Visitor's Google account ── identity-only OAuth ──┐
+                                                  ▼
+                                    Node/Express server
+                                      │           │
+                    service account │           │ verified email + UTC time
+                         read-only  ▼           ▼ append
+                            Ride Sheet       Sign-in log Sheet
+                                      │
+                                      ▼
+                              Normalized ride rows
+                                      │
+                                      ▼
+                            TypeScript analytics
+                                      │
+                                      ▼
+                         Vite UI + SVG/CSS charts
 ```
 
 ### Project layout
@@ -81,40 +84,47 @@ Vite browser UI + SVG/CSS visualizations
 - Node.js 20 or newer
 - A Google Cloud project
 - A Google Sheet containing a Strava activity export
+- A server service account and a separate sign-in log spreadsheet
 - A Google OAuth 2.0 **Web application** client
 
-The Sheet is read-only from the application’s perspective. The app does not write rides, goals, or settings back to Google Sheets.
+The cycling data Sheet is read-only from the application’s perspective. A separate sign-in log spreadsheet receives one email/timestamp row after each successful sign-in. The app does not write rides, goals, or settings to the cycling data Sheet.
 
 ---
 
-## Google Cloud and OAuth setup
+## Google Cloud, service account, and sign-in setup
 
 1. Create or select a Google Cloud project.
 2. Enable the **Google Sheets API**.
-3. Configure the OAuth consent screen.
-4. Create an OAuth 2.0 client ID with application type **Web application**.
-5. Add this local redirect URI:
+3. Create a service account for the server and create a JSON key. Keep its private key secret; it belongs only in the server environment.
+4. Create two spreadsheets in the owner account:
+   - Share the cycling data spreadsheet with the service account email as **Viewer**.
+   - Create a separate sign-in log spreadsheet, share it with the service account email as **Editor**, and add a tab named `Sign-ins` with headers `Email` and `Signed in at (UTC)` in columns A and B.
+
+   Keep these as separate spreadsheet files so the service account cannot write to the cycling data file.
+
+5. Configure the OAuth consent screen for external users and create an OAuth 2.0 client ID with application type **Web application**. While the consent screen is in testing mode, only its configured test users can sign in.
+6. Add this local redirect URI:
 
    ```text
    http://localhost:8787/oauth2callback
    ```
 
-6. Copy `.env.example` to `.env`.
-7. Fill in the OAuth and Sheet values:
+7. Copy `.env.example` to `.env` and fill in the OAuth client, service-account, and spreadsheet values:
 
    ```dotenv
    GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
    GOOGLE_CLIENT_SECRET=your-client-secret
    GOOGLE_REDIRECT_URI=http://localhost:8787/oauth2callback
    SESSION_SECRET=use-a-long-random-value
-   STRAVA_SHEET_ID=your-spreadsheet-id
-   # Optional: pin a specific tab/range. Leave blank to use the first tab.
+   GOOGLE_SERVICE_ACCOUNT_EMAIL=ridescope-server@your-project.iam.gserviceaccount.com
+   GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+   STRAVA_SHEET_ID=your-cycling-data-spreadsheet-id
    STRAVA_SHEET_RANGE=
+   SIGNIN_LOG_SHEET_ID=your-separate-sign-in-log-spreadsheet-id
+   SIGNIN_LOG_SHEET_RANGE='Sign-ins'!A:B
    ```
 
-8. Make sure the Google account used for OAuth has access to the configured Sheet.
-
-The OAuth client secret is only read by the Node server. It is never bundled into the Vite frontend.
+Visitors grant only the `openid` and `email` identity scopes. Their Google accounts do not need access to either spreadsheet. The server verifies the ID token and verified-email claim, records `[email, ISO-8601 UTC timestamp]` in the log spreadsheet, and then creates the session. If logging fails, sign-in is not completed. OAuth client secrets and the service-account key are only read by the Node server and are never bundled into the Vite frontend.
 
 ---
 
@@ -178,11 +188,15 @@ GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 GOOGLE_REDIRECT_URI=https://your-project.vercel.app/oauth2callback
 SESSION_SECRET=...
+GOOGLE_SERVICE_ACCOUNT_EMAIL=...
+GOOGLE_PRIVATE_KEY=...
 STRAVA_SHEET_ID=...
 STRAVA_SHEET_RANGE=
+SIGNIN_LOG_SHEET_ID=...
+SIGNIN_LOG_SHEET_RANGE='Sign-ins'!A:B
 ```
 
-Add the deployed callback URL to the Google OAuth client's authorized redirect URIs. OAuth tokens and authorization state are held in a short-lived, authenticated-encryption cookie, so sign-in does not depend on serverless instance memory. Keep `SESSION_SECRET` stable across deployments; rotating it signs out existing sessions.
+Add the deployed callback URL to the Google OAuth client's authorized redirect URIs. Share the cycling spreadsheet with the service account as Viewer and the separate sign-in log spreadsheet as Editor. OAuth state, nonce, and verified identity are held in a short-lived, authenticated-encryption cookie, so sign-in does not depend on serverless instance memory. Visitor access/refresh tokens are not retained. Keep `SESSION_SECRET` stable across deployments; rotating it signs out existing sessions.
 
 ---
 
@@ -248,10 +262,10 @@ CSV export respects the active year/all-time scope, bike filter, search query, a
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/auth/status` | Reports whether the session has Google tokens. |
+| `GET /api/auth/status` | Reports whether the session has a verified Google identity. |
 | `GET /auth/google` | Starts the Google OAuth flow. |
-| `GET /oauth2callback` | Validates OAuth state and exchanges the code. |
-| `GET /api/rides` | Reads the configured Sheet and returns rows plus sync time. |
+| `GET /oauth2callback` | Validates OAuth state and ID-token identity, appends the sign-in row, and creates the session. |
+| `GET /api/rides` | Reads the cycling Sheet with the server service account and returns rows plus sync time. |
 | `POST /logout` | Destroys the current session. |
 | `GET /api/health` | Lightweight server health check. |
 
@@ -261,10 +275,10 @@ API responses are marked `no-store` so a sync does not get confused with a cache
 
 ## Privacy and production hardening
 
-The application encrypts OAuth session data into a short-lived, HTTP-only cookie. Before deploying publicly:
+The application encrypts Google identity and OAuth state into a short-lived, HTTP-only cookie. Each successful sign-in appends the visitor's verified email and UTC timestamp to the owner's separate log spreadsheet. Before deploying publicly:
 
 - Store `SESSION_SECRET` in a secret manager.
-- Restrict the OAuth consent screen to the intended account or Workspace domain.
+- Configure the OAuth consent screen for external accounts; use its test-user controls until the app is ready for broader access.
 - Use HTTPS and set the production environment securely.
 - Keep `.env` out of source control; it is already ignored.
 - Add rate limiting and centralized request logging at the deployment edge.

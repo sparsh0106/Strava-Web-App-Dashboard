@@ -10,7 +10,12 @@ const ROOT = path.resolve(__dirname, "..");
 const PORT = Number(process.env.PORT || 8787);
 const SHEET_ID = process.env.STRAVA_SHEET_ID;
 const RANGE_OVERRIDE = process.env.STRAVA_SHEET_RANGE || "";
-const SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"];
+const SIGNIN_LOG_SHEET_ID = process.env.SIGNIN_LOG_SHEET_ID;
+const SIGNIN_LOG_RANGE = process.env.SIGNIN_LOG_SHEET_RANGE || "'Sign-ins'!A:B";
+const IDENTITY_SCOPES = ["openid", "email"];
+const SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
+const SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+const SERVICE_ACCOUNT_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n");
 const SESSION_COOKIE = "ridescope_session";
 const SESSION_MAX_AGE = 60 * 60 * 12;
 const SESSION_KEY = crypto.createHash("sha256")
@@ -22,9 +27,12 @@ if (
   !process.env.GOOGLE_CLIENT_SECRET ||
   !process.env.GOOGLE_REDIRECT_URI ||
   !process.env.SESSION_SECRET ||
-  !SHEET_ID
+  !SHEET_ID ||
+  !SIGNIN_LOG_SHEET_ID ||
+  !SERVICE_ACCOUNT_EMAIL ||
+  !SERVICE_ACCOUNT_KEY
 ) {
-  console.warn("Missing Google OAuth / Sheet environment variables. Copy .env.example to .env and fill them in.");
+  console.warn("Missing Google OAuth, service account, ride Sheet, or sign-in log configuration. See .env.example.");
 }
 
 const oauth2 = new google.auth.OAuth2(
@@ -32,6 +40,13 @@ const oauth2 = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_SECRET,
   process.env.GOOGLE_REDIRECT_URI
 );
+const serviceAccount = SERVICE_ACCOUNT_EMAIL && SERVICE_ACCOUNT_KEY
+  ? new google.auth.JWT({
+      email: SERVICE_ACCOUNT_EMAIL,
+      key: SERVICE_ACCOUNT_KEY,
+      scopes: SHEETS_SCOPES
+    })
+  : null;
 
 const app = express();
 app.set("trust proxy", 1);
@@ -118,19 +133,25 @@ function noStore(res) {
 app.get("/api/auth/status", (req, res) => {
   noStore(res);
   res.json({
-    connected: Boolean(req.session.tokens?.access_token || req.session.tokens?.refresh_token),
-    sheetConfigured: Boolean(SHEET_ID)
+    connected: Boolean(req.session.user?.sub && req.session.user?.email),
+    email: req.session.user?.email,
+    sheetConfigured: Boolean(SHEET_ID && serviceAccount)
   });
 });
 
 app.get("/auth/google", (req, res) => {
+  if (!serviceAccount || !SIGNIN_LOG_SHEET_ID) {
+    return res.status(503).send("Google sign-in is not configured on the server yet.");
+  }
   const state = crypto.randomBytes(24).toString("hex");
+  const nonce = crypto.randomBytes(24).toString("hex");
   req.session.oauthState = state;
+  req.session.oauthNonce = nonce;
   const url = oauth2.generateAuthUrl({
-    access_type: "offline",
-    prompt: "consent",
-    scope: SCOPES,
-    state
+    prompt: "select_account",
+    scope: IDENTITY_SCOPES,
+    state,
+    nonce
   });
   res.redirect(url);
 });
@@ -141,12 +162,39 @@ app.get("/oauth2callback", async (req, res) => {
     const returnedState = typeof req.query.state === "string" ? req.query.state : null;
     if (!code || !returnedState || !req.session.oauthState || returnedState !== req.session.oauthState) {
       delete req.session.oauthState;
+      delete req.session.oauthNonce;
       return res.status(400).send("Invalid or expired Google authorization request.");
     }
 
+    const expectedNonce = req.session.oauthNonce;
     delete req.session.oauthState;
+    delete req.session.oauthNonce;
     const { tokens } = await oauth2.getToken(code);
-    req.session.tokens = tokens;
+    if (!tokens.id_token) return res.status(401).send("Google did not return a sign-in identity.");
+
+    const ticket = await oauth2.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+    const identity = ticket.getPayload();
+    if (
+      !expectedNonce ||
+      identity?.nonce !== expectedNonce ||
+      !identity.sub ||
+      !identity.email ||
+      identity.email_verified !== true
+    ) {
+      return res.status(401).send("Google did not return a valid, verified email address.");
+    }
+
+    try {
+      await recordSignIn(identity.email);
+    } catch (error) {
+      console.error("Sign-in log append failed:", error instanceof Error ? error.message : error);
+      return res.status(503).send("Sign-in could not be recorded. Please try again later.");
+    }
+
+    req.session.user = { sub: identity.sub, email: identity.email };
     return res.redirect("/");
   } catch (error) {
     console.error("Google authorization failed:", error instanceof Error ? error.message : error);
@@ -162,29 +210,32 @@ app.post("/logout", (req, res) => {
   });
 });
 
-async function getAuthorizedClient(req) {
-  const tokens = req.session.tokens;
-  if (!tokens) return null;
-  const client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
-  );
-  client.setCredentials(tokens);
-  client.on("tokens", updated => {
-    req.session.tokens = { ...req.session.tokens, ...updated };
+function getSheetsApi() {
+  if (!serviceAccount) throw new Error("Google Sheets service account is not configured on the server.");
+  return google.sheets({ version: "v4", auth: serviceAccount });
+}
+
+async function recordSignIn(email) {
+  if (!SIGNIN_LOG_SHEET_ID) throw new Error("Sign-in log Sheet is not configured on the server.");
+  const sheets = getSheetsApi();
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SIGNIN_LOG_SHEET_ID,
+    range: SIGNIN_LOG_RANGE,
+    valueInputOption: "RAW",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: {
+      values: [[email, new Date().toISOString()]]
+    }
   });
-  return client;
 }
 
 app.get("/api/rides", async (req, res) => {
   noStore(res);
   try {
     if (!SHEET_ID) return res.status(500).send("Google Sheet is not configured on the server.");
-    const auth = await getAuthorizedClient(req);
-    if (!auth) return res.status(401).send("Google account not connected.");
+    if (!req.session.user?.sub) return res.status(401).send("Google account not connected.");
 
-    const sheets = google.sheets({ version: "v4", auth });
+    const sheets = getSheetsApi();
     let range = RANGE_OVERRIDE;
 
     if (!range) {
@@ -219,7 +270,11 @@ app.get("/api/rides", async (req, res) => {
 });
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, sheetConfigured: Boolean(SHEET_ID) });
+  res.json({
+    ok: true,
+    sheetConfigured: Boolean(SHEET_ID && serviceAccount),
+    signinLogConfigured: Boolean(SIGNIN_LOG_SHEET_ID && serviceAccount)
+  });
 });
 
 // Vercel's Express function serves the Vite output alongside the API. Include

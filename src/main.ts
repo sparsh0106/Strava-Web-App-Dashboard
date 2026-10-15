@@ -479,7 +479,7 @@ function loadingView(): string {
       <div class="skeleton skeleton--title"></div>
       <div class="skeleton skeleton--copy"></div>
       <div class="skeleton skeleton--button"></div>
-      <div class="loading-note"><span class="loading-pulse"></span>Connecting to your private Sheets source</div>
+      <div class="loading-note"><span class="loading-pulse"></span>Connecting to the ride data source</div>
     </div>
   </div>`;
 }
@@ -487,17 +487,17 @@ function loadingView(): string {
 function loginView(): string {
   return `<div class="auth-layout reveal">
     <div class="auth-card">
-      <div class="auth-kicker"><span class="status-dot"></span>Private data source</div>
+      <div class="auth-kicker"><span class="status-dot"></span>Google sign-in</div>
       <div class="auth-mark">${icon("bike", 28)}</div>
       <h1>Turn your rides into a <em>living</em> dashboard.</h1>
-      <p class="auth-copy">RideScope reads your Strava export from a private Google Sheet, keeps OAuth on the server, and turns every ride into clear, explorable insight.</p>
+      <p class="auth-copy">Sign in with any Google account. RideScope loads ride data from the site owner's private Sheet; your account is used only to verify your email.</p>
       <div class="auth-features">
-        <span>${icon("check", 14)} Read-only access</span>
-        <span>${icon("check", 14)} Local analytics</span>
-        <span>${icon("check", 14)} No client secret</span>
+        <span>${icon("check", 14)} Identity-only sign-in</span>
+        <span>${icon("check", 14)} No access to your Sheets</span>
+        <span>${icon("check", 14)} Server-side data access</span>
       </div>
-      <button class="button button--primary button--wide" data-action="connect">${icon("database", 17)} Continue with Google ${icon("arrow", 16)}</button>
-      <p class="auth-footnote">Requested scope: <code>spreadsheets.readonly</code></p>
+      <button class="button button--primary button--wide" data-action="connect">${icon("database", 17)} Sign in with Google ${icon("arrow", 16)}</button>
+      <p class="auth-footnote">Successful sign-ins are logged with your verified email and UTC time in the site owner's Google Sheet. Anyone who signs in can view this dashboard's ride data.</p>
     </div>
   </div>`;
 }
