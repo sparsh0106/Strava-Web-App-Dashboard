@@ -1086,6 +1086,32 @@ function moveTooltip(event: PointerEvent, tooltip: HTMLElement): void {
   tooltip.style.top = `${y}px`;
 }
 
+const spotlightSelector = ".panel, .hero-card, .kpi-card, .bike-card, .goal-card, .streak-hero";
+let spotlightFrame = 0;
+let pendingSpotlight: { element: HTMLElement; x: number; y: number } | null = null;
+
+document.addEventListener("pointermove", event => {
+  if ((event.pointerType !== "mouse" && event.pointerType !== "pen") || !window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+  if (!(event.target instanceof Element)) return;
+  const element = event.target.closest<HTMLElement>(spotlightSelector);
+  if (!element) return;
+
+  pendingSpotlight = { element, x: event.clientX, y: event.clientY };
+  if (spotlightFrame) return;
+  spotlightFrame = window.requestAnimationFrame(() => {
+    const current = pendingSpotlight;
+    pendingSpotlight = null;
+    spotlightFrame = 0;
+    if (!current?.element.isConnected) return;
+    const bounds = current.element.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return;
+    const x = Math.max(0, Math.min(100, ((current.x - bounds.left) / bounds.width) * 100));
+    const y = Math.max(0, Math.min(100, ((current.y - bounds.top) / bounds.height) * 100));
+    current.element.style.setProperty("--spotlight-x", `${x.toFixed(2)}%`);
+    current.element.style.setProperty("--spotlight-y", `${y.toFixed(2)}%`);
+  });
+}, { passive: true });
+
 
 
 function showToast(message: string, kind: ToastKind = "info"): void {

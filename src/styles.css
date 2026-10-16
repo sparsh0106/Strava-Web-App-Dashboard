@@ -1250,3 +1250,57 @@ html[data-theme="dark"][data-palette="citrus"] { --cyan: #f3c665; --cyan-soft: r
   .line-chart path[fill="none"] { stroke-dasharray: none; stroke-dashoffset: 0; }
   .bar-track i { clip-path: none; }
 }
+
+/* Cursor-tracked accent light, inspired by the supplied portfolio reference. */
+@property --spotlight-x {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 50%;
+}
+@property --spotlight-y {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 50%;
+}
+
+:where(.panel:not(.hero-card), .kpi-card, .bike-card, .goal-card, .streak-hero) {
+  position: relative;
+  isolation: isolate;
+  --spotlight-x: 50%;
+  --spotlight-y: 50%;
+  transition-property: transform, border-color, box-shadow, background, --spotlight-x, --spotlight-y;
+  transition-duration: 320ms, 320ms, 320ms, 320ms, 90ms, 90ms;
+  transition-timing-function: var(--ease), ease, ease, ease, linear, linear;
+}
+:where(.panel:not(.hero-card), .kpi-card, .bike-card, .goal-card, .streak-hero)::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: radial-gradient(300px circle at var(--spotlight-x) var(--spotlight-y), rgba(var(--accent-rgb), 0.22), rgba(var(--accent-rgb), 0.09) 38%, transparent 76%);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease;
+}
+.hero-card { --spotlight-x: 76%; --spotlight-y: 42%; }
+.hero-card::before {
+  background:
+    radial-gradient(340px circle at var(--spotlight-x) var(--spotlight-y), rgba(255, 226, 211, 0.26), transparent 70%),
+    linear-gradient(100deg, rgba(255, 255, 255, 0.04), transparent 68%);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :where(.panel:not(.hero-card), .kpi-card, .bike-card, .goal-card, .streak-hero):hover::before,
+  :where(.panel:not(.hero-card), .kpi-card, .bike-card, .goal-card, .streak-hero):focus-within::before { opacity: 1; }
+  .hero-card:hover::before { opacity: 1; }
+  :where(.panel:not(.hero-card), .kpi-card, .bike-card, .goal-card, .streak-hero):hover {
+    border-color: rgba(var(--accent-rgb), 0.3);
+    box-shadow: var(--shadow), 0 16px 36px rgba(var(--accent-rgb), 0.12), inset 0 1px rgba(255, 255, 255, 0.05);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(.panel:not(.hero-card), .kpi-card, .bike-card, .goal-card, .streak-hero) { transition: none; }
+  :where(.panel:not(.hero-card), .kpi-card, .bike-card, .goal-card, .streak-hero)::before { transition: none; }
+}
