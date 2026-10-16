@@ -152,3 +152,9 @@ PostgreSQL generates the `id`. `ride_date` is required; `start_time` and metric 
 - **The ride count is zero or a ride is missing:** check the Neon `rides` table and confirm the row was saved. Press **Sync** or reload the dashboard.
 - **Changes are not visible yet:** the open page checks about once a minute; use **Sync** to fetch immediately. API responses are not cached.
 - **A view is empty:** some charts require optional source values. Date-only rows, for example, do not appear in time-of-day analytics.
+
+---
+
+## 👤 Author
+
+**Sparsh Agarwal** — [GitHub](https://github.com/sparsh0106) · [LinkedIn](https://www.linkedin.com/in/sparsh-agarwal-4b443b304/)
