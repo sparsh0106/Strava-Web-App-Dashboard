@@ -15,7 +15,7 @@ import {
 import {
   fetchDataset,
   type DatasetResult
-} from "./sheets";
+} from "./data";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const tooltip = document.createElement("div");
@@ -548,14 +548,14 @@ function renderSidebar(): string {
       ${navGroup("Trends", ["performance", "day-of-week", "hour-of-day", "monthly-trends", "speed-elevation", "hr-zones", "progressive-metrics"])}
     </div>
     <div class="sidebar-footer">
-      <div class="source-mini"><span class="source-icon">${icon("database", 15)}</span><div><strong>Ride data</strong><span>live from Google Sheets</span></div><span class="source-live"></span></div>
+      <div class="source-mini"><span class="source-icon">${icon("database", 15)}</span><div><strong>Ride data</strong><span>live from PostgreSQL</span></div><span class="source-live"></span></div>
     </div>
   </aside>`;
 }
 
 function renderQualityRail(): string {
   if (!state.dataset) {
-    return `<div class="rail-card rail-card--empty"><div class="rail-icon">${icon("database", 18)}</div><div class="eyebrow">Source</div><h3>Ride data</h3><p>Ride statistics will appear here when the Sheet is available.</p></div>`;
+    return `<div class="rail-card rail-card--empty"><div class="rail-icon">${icon("database", 18)}</div><div class="eyebrow">Source</div><h3>Ride data</h3><p>Ride statistics will appear here when the database is available.</p></div>`;
   }
   const quality = state.dataset.dataQuality;
   const total = Math.max(1, quality.totalRides);
@@ -567,7 +567,7 @@ function renderQualityRail(): string {
     ["Start time", quality.missing.startTime]
   ] as const;
   return `<div class="rail-card rail-card--quality">
-    <div class="rail-card-heading"><div><div class="eyebrow">Data pulse</div><h3>Sheet health</h3></div><span class="quality-score">${complete}%</span></div>
+    <div class="rail-card-heading"><div><div class="eyebrow">Data pulse</div><h3>Data health</h3></div><span class="quality-score">${complete}%</span></div>
     <div class="quality-bar"><span style="width:${complete}%"></span></div>
     <p class="rail-copy">${fmt.n(quality.ridesWithDistance)} of ${fmt.n(quality.totalRides)} rides include a distance value.</p>
     <div class="quality-list">${fieldRows.map(([label, missing]) => {
@@ -767,7 +767,7 @@ function rideRow(ride: Ride, compact = false): string {
 
 function overviewView(): string {
   const rides = getScopedRides();
-  if (!rides.length) return emptyPanel("No rides in this scope", "Choose another year or sync the Sheet to refresh your ride log.");
+  if (!rides.length) return emptyPanel("No rides in this scope", "Choose another year or refresh the database to reload your ride log.");
   const totalDistance = sum(rides.map(r => r.distance));
   const totalElevation = sum(rides.map(r => r.elevation));
   const totalTime = sum(rides.map(rideDurationHours));
@@ -861,7 +861,7 @@ function rideDetailView(): string {
   const date = state.selectedDate;
   const rides = date ? state.dataset?.rides.filter(ride => ride.date === date) ?? [] : [];
   if (!date) return emptyPanel("Choose a calendar date", "Open the calendar and select a day to see its ride details.", `<button class="button button--secondary" data-page-target="calendar">Open calendar ${icon("arrow", 15)}</button>`);
-  if (!rides.length) return `<div class="page-stack">${pageHeader(fmt.date(date), "No ride recorded", "There are no activities in your Sheet for this date.", `<button class="button button--secondary" data-page-target="calendar">${icon("arrow", 15)} Back to calendar</button>`)}</div>`;
+  if (!rides.length) return `<div class="page-stack">${pageHeader(fmt.date(date), "No ride recorded", "There are no activities in your ride log for this date.", `<button class="button button--secondary" data-page-target="calendar">${icon("arrow", 15)} Back to calendar</button>`)}</div>`;
 
   const totalDistance = sum(rides.map(ride => ride.distance));
   const totalElevation = sum(rides.map(ride => ride.elevation));
@@ -895,7 +895,7 @@ function performanceView(): string {
 
 function bikesView(): string {
   const bikes = state.dataset?.bikes ?? [];
-  if (!bikes.length) return emptyPanel("No bikes detected", "Add a bike name in the source Sheet to unlock cycle comparisons.");
+  if (!bikes.length) return emptyPanel("No bikes detected", "Add a bike name to a ride record to unlock cycle comparisons.");
   const totalDistance = Math.max(1, sum(bikes.map(bike => bike.distanceKm)));
   const selected = bikes.find(bike => bike.bike === state.bikeFilter);
   return `<div class="page-stack">
@@ -933,7 +933,7 @@ function dayOfWeekView(): string {
 function hourOfDayView(): string {
   const rides = getScopedRides();
   const timedRides = rides.filter(ride => ride.startTime !== null);
-  if (!timedRides.length) return `<div class="page-stack">${pageHeader(`${scopeLabel()} · source capability`, "Your riding clock", "This view becomes useful as soon as the source includes a ride start time.")}${emptyPanel("Start time is not captured", "The current Sheet has date values but no clock time, so this dashboard will not invent hour-of-day data. Add a time column to the source row to enable the 24-hour view.", `<button class="button button--secondary" data-page-target="rides">Inspect source rows ${icon("arrow", 15)}</button>`)}<section class="panel reveal reveal--delay-1"><div class="section-heading"><div><div class="eyebrow">Why this is blank</div><h2>Data integrity first</h2><p>Date-only rows are kept accurate for calendar and weekday analysis. Hour buckets stay empty until real times exist.</p></div><span class="panel-badge">${fmt.n(rides.length)} date-only rides</span></div></section></div>`;
+  if (!timedRides.length) return `<div class="page-stack">${pageHeader(`${scopeLabel()} · source capability`, "Your riding clock", "This view becomes useful as soon as the source includes a ride start time.")}${emptyPanel("Start time is not captured", "The current dataset has date values but no clock time, so this dashboard will not invent hour-of-day data. Include a time with the date in a ride record to enable the 24-hour view.", `<button class="button button--secondary" data-page-target="rides">Inspect source rows ${icon("arrow", 15)}</button>`)}<section class="panel reveal reveal--delay-1"><div class="section-heading"><div><div class="eyebrow">Why this is blank</div><h2>Data integrity first</h2><p>Date-only rows are kept accurate for calendar and weekday analysis. Hour buckets stay empty until real times exist.</p></div><span class="panel-badge">${fmt.n(rides.length)} date-only rides</span></div></section></div>`;
   const patterns = computeHourOfDayPatterns(timedRides);
   return `<div class="page-stack">${pageHeader(`${scopeLabel()} · ${fmt.n(timedRides.length)} timed rides`, "Your riding clock", "See which parts of the day carry your training.", `<span class="panel-badge">Time source detected</span>`)}<section class="panel panel--chart reveal reveal--delay-1"><div class="panel-heading"><div><div class="eyebrow">24-hour distribution</div><h2>When the wheels turn</h2><p>Ride count by local start hour</p></div></div>${barChart(patterns.map(pattern => ({ label: `${String(pattern.hour).padStart(2, "0")}`, value: pattern.rides, detail: fmt.km(pattern.distanceKm) })), value => fmt.n(value), "violet")}</section></div>`;
 }
@@ -962,7 +962,7 @@ function hrZonesView(): string {
   const withHr = total;
   return `<div class="page-stack">
     ${pageHeader(`${scopeLabel()} · ${fmt.n(withHr)} rides with HR`, "Effort, visualized", "A lightweight intensity view based on average heart rate in the source rows.", `<span class="panel-badge">Typical cycling bands</span>`)}
-    <section class="content-grid content-grid--main reveal reveal--delay-1"><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Distribution</div><h2>Average HR zones</h2><p>Ride count by recorded average heart rate</p></div></div>${withHr ? `<div class="zone-layout"><div class="zone-donut">${ringChart(total - (zones[0]?.rides ?? 0), total, "above recovery", "orange")}<div class="zone-legend">${zones.map((zone, index) => `<span><i class="zone-dot zone-dot--${index + 1}"></i>${escapeHtml(zone.label.split(" · ")[0])} <b>${zone.rides}</b></span>`).join("")}</div></div><div class="zone-bars">${zones.map(zone => `<div class="zone-row"><div><span>${escapeHtml(zone.label)}</span><strong>${zone.rides} rides</strong></div><i><b style="width:${total ? (zone.rides / total) * 100 : 0}%"></b></i><small>${fmt.km(zone.distanceKm)}</small></div>`).join("")}</div></div>` : emptyPanel("No heart-rate rows yet", "When average HR is present in the Sheet, this view will group rides into readable intensity bands.")}</div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Read this carefully</div><h2>Personal context matters</h2></div></div><div class="callout callout--orange"><span>${icon("info", 18)}</span><p>These fixed bands are a starting point for interpretation, not a medical prescription. Use your own tested zones when available.</p></div><div class="stat-stack">${statTile("Rides with HR", fmt.n(withHr), "recorded average", "orange")}${statTile("Rides without HR", fmt.n(getScopedRides().length - withHr), "missing from this view", "violet")}</div></div></section>
+    <section class="content-grid content-grid--main reveal reveal--delay-1"><div class="panel panel--chart"><div class="panel-heading"><div><div class="eyebrow">Distribution</div><h2>Average HR zones</h2><p>Ride count by recorded average heart rate</p></div></div>${withHr ? `<div class="zone-layout"><div class="zone-donut">${ringChart(total - (zones[0]?.rides ?? 0), total, "above recovery", "orange")}<div class="zone-legend">${zones.map((zone, index) => `<span><i class="zone-dot zone-dot--${index + 1}"></i>${escapeHtml(zone.label.split(" · ")[0])} <b>${zone.rides}</b></span>`).join("")}</div></div><div class="zone-bars">${zones.map(zone => `<div class="zone-row"><div><span>${escapeHtml(zone.label)}</span><strong>${zone.rides} rides</strong></div><i><b style="width:${total ? (zone.rides / total) * 100 : 0}%"></b></i><small>${fmt.km(zone.distanceKm)}</small></div>`).join("")}</div></div>` : emptyPanel("No heart-rate rows yet", "When average HR is present in the database, this view will group rides into readable intensity bands.")}</div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Read this carefully</div><h2>Personal context matters</h2></div></div><div class="callout callout--orange"><span>${icon("info", 18)}</span><p>These fixed bands are a starting point for interpretation, not a medical prescription. Use your own tested zones when available.</p></div><div class="stat-stack">${statTile("Rides with HR", fmt.n(withHr), "recorded average", "orange")}${statTile("Rides without HR", fmt.n(getScopedRides().length - withHr), "missing from this view", "violet")}</div></div></section>
   </div>`;
 }
 
@@ -1001,9 +1001,9 @@ function goalsView(): string {
     { key: "elevationM" as const, label: "Elevation", value: elevation, target: state.goals.elevationM, unit: "m", tone: "violet", iconName: "elevation" }
   ];
   return `<div class="page-stack">
-    ${pageHeader(`${scopeLabel()} · personal targets`, "Make the next ride count", "These goals live in this browser and never change your private Sheet.", `<button class="button button--secondary" data-action="reset-goals">Reset defaults ${icon("sync", 15)}</button>`)}
+    ${pageHeader(`${scopeLabel()} · personal targets`, "Make the next ride count", "These goals live in this browser and never change the database.", `<button class="button button--secondary" data-action="reset-goals">Reset defaults ${icon("sync", 15)}</button>`)}
     <section class="goals-grid reveal reveal--delay-1">${goalCards.map(goal => { const percent = Math.min(100, goal.target ? (goal.value / goal.target) * 100 : 0); return `<div class="goal-card goal-card--${goal.tone}"><div class="goal-card-top"><span class="goal-icon">${icon(goal.iconName, 18)}</span><span>${percent >= 100 ? "Complete" : "In progress"}</span></div><div class="eyebrow">${goal.label}</div><strong>${fmt.n(goal.value, goal.key === "distanceKm" ? 1 : 0)} <small>${goal.unit}</small></strong><div class="goal-progress"><i style="width:${percent}%"></i></div><div class="goal-footer"><span>${percent >= 100 ? "Target reached" : `${Math.round(percent)}% complete`}</span><span>Goal ${fmt.n(goal.target, 0)} ${goal.unit}</span></div><label class="goal-input"><span>Set target</span><input type="number" min="1" step="${goal.key === "distanceKm" ? "10" : "1"}" value="${goal.target}" data-goal-input="${goal.key}" aria-label="${goal.label} goal"/></label></div>`; }).join("")}</section>
-    <section class="content-grid content-grid--main reveal reveal--delay-2"><div class="panel goal-insight"><div class="eyebrow">Goal math</div><h2>${goalCards[0].target && distance >= goalCards[0].target ? "Your distance goal is in reach." : "Build a rhythm that compounds."}</h2><p>Goals are scoped to ${escapeHtml(scopeLabel().toLowerCase())}. Switch to All time to see your complete history, or change the target for this browser.</p><div class="goal-insight-row"><span>${icon("database", 15)} Stored locally</span><span>${icon("check", 15)} No Sheet writes</span><span>${icon("spark", 15)} Your pace, your rules</span></div></div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Momentum cue</div><h2>${goalCards[0].target && distance >= goalCards[0].target ? "Keep the chain alive" : "Three days is a streak"}</h2></div></div><p class="body-copy">Consistency is easier to maintain when the next action is small. Use the streak view to find your next three-day window, then let the ride log do the remembering.</p><button class="panel-footer-link" data-page-target="streaks">Open consistency view ${icon("arrow", 14)}</button></div></section>
+    <section class="content-grid content-grid--main reveal reveal--delay-2"><div class="panel goal-insight"><div class="eyebrow">Goal math</div><h2>${goalCards[0].target && distance >= goalCards[0].target ? "Your distance goal is in reach." : "Build a rhythm that compounds."}</h2><p>Goals are scoped to ${escapeHtml(scopeLabel().toLowerCase())}. Switch to All time to see your complete history, or change the target for this browser.</p><div class="goal-insight-row"><span>${icon("database", 15)} Stored locally</span><span>${icon("check", 15)} Read-only source</span><span>${icon("spark", 15)} Your pace, your rules</span></div></div><div class="panel"><div class="panel-heading"><div><div class="eyebrow">Momentum cue</div><h2>${goalCards[0].target && distance >= goalCards[0].target ? "Keep the chain alive" : "Three days is a streak"}</h2></div></div><p class="body-copy">Consistency is easier to maintain when the next action is small. Use the streak view to find your next three-day window, then let the ride log do the remembering.</p><button class="panel-footer-link" data-page-target="streaks">Open consistency view ${icon("arrow", 14)}</button></div></section>
   </div>`;
 }
 
@@ -1155,7 +1155,12 @@ function exportCsv(): void {
   }
   const header = ["Date", "Start time", "Bike", "Device", "Distance km", "Elevation m", "Average speed km/h", "Max speed km/h", "Moving time", "Average HR", "Max HR"];
   const rows = rides.map(ride => [ride.date, ride.startTime ?? "", ride.bike, ride.device ?? "", ride.distance ?? "", ride.elevation ?? "", ride.avgSpeed ?? "", ride.maxSpeed ?? "", ride.movingTime, ride.hrMean ?? "", ride.hrMax ?? ""]);
-  const csv = [header, ...rows].map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const csvCell = (value: string | number): string => {
+    const raw = String(value);
+    const safe = typeof value === "string" && /^[\s]*[=+\-@]/.test(raw) ? `'${raw}` : raw;
+    return `"${safe.replace(/"/g, '""')}"`;
+  };
+  const csv = [header, ...rows].map(row => row.map(csvCell).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -1281,19 +1286,25 @@ function handleClick(event: MouseEvent): void {
 
 function handleKeydown(event: KeyboardEvent): void {
   const target = event.target as HTMLElement;
-  const interactive = target.closest<HTMLElement>("[data-ride-open], [data-day]");
-  if (interactive && (event.key === "Enter" || event.key === " ")) {
-    event.preventDefault();
-    if (interactive.dataset.rideOpen) openRide(interactive.dataset.rideOpen);
-    if (interactive.dataset.day) openCalendarDate(interactive.dataset.day);
-    return;
-  }
   if (event.key === "Escape") {
     if (state.selectedRide || state.menuOpen) {
       state.selectedRide = null;
       state.menuOpen = false;
       mountShell();
     }
+    return;
+  }
+  // Native buttons and form controls already translate Enter/Space into clicks.
+  // Let that happen so controls nested inside a keyboard-operable table row
+  // (such as the favorite button) keep their own action.
+  if (target.closest("button, input, select, textarea, a")) return;
+
+  const interactive = target.closest<HTMLElement>("[data-ride-open], [data-day]");
+  if (interactive && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    if (interactive.dataset.rideOpen) openRide(interactive.dataset.rideOpen);
+    if (interactive.dataset.day) openCalendarDate(interactive.dataset.day);
+    return;
   }
   if (event.key === "/" && state.page === "rides" && document.activeElement?.tagName !== "INPUT") {
     event.preventDefault();
@@ -1324,20 +1335,50 @@ async function loadData(): Promise<void> {
 }
 
 async function syncData(): Promise<void> {
-  if (state.syncing) return;
+  if (state.syncing || backgroundSyncInFlight) return;
   state.syncing = true;
   state.error = null;
   mountShell();
   try {
     const result = await fetchDataset();
     applyDataset(result);
-    showToast("Sheet synced and analytics refreshed", "success");
-  } catch (error) {
-    state.error = error instanceof Error ? error.message : "Could not sync the Sheet";
+    showToast("Database refreshed and analytics updated", "success");
+  } catch {
+    // A sync starts from an already loaded dashboard. Keep that data visible
+    // and report the failure with a toast instead of replacing the page.
     showToast("Sync failed — showing the last available data", "error");
   } finally {
     state.syncing = false;
     mountShell();
+  }
+}
+
+let backgroundSyncInFlight = false;
+
+async function backgroundSyncData(): Promise<void> {
+  if (
+    state.loading ||
+    state.syncing ||
+    backgroundSyncInFlight ||
+    document.visibilityState !== "visible" ||
+    document.activeElement?.matches("input, textarea, select, [contenteditable='true']")
+  ) return;
+
+  backgroundSyncInFlight = true;
+  try {
+    const result = await fetchDataset();
+    if (JSON.stringify(result.dataset) !== JSON.stringify(state.dataset)) {
+      const scrollY = window.scrollY;
+      applyDataset(result);
+      mountShell();
+      window.scrollTo(0, scrollY);
+    } else if (result.syncedAt) {
+      state.lastSynced = result.syncedAt;
+    }
+  } catch {
+    // Keep the current dashboard usable; the manual Sync action reports errors.
+  } finally {
+    backgroundSyncInFlight = false;
   }
 }
 
@@ -1355,6 +1396,10 @@ app.addEventListener("click", handleClick);
 document.addEventListener("keydown", handleKeydown);
 window.addEventListener("popstate", handlePopState);
 window.addEventListener("hashchange", handlePopState);
+window.setInterval(() => void backgroundSyncData(), 60_000);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void backgroundSyncData();
+});
 
 applyTheme(state.theme, state.palette);
 mountShell();

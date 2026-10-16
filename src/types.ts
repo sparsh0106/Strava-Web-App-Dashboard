@@ -1,7 +1,7 @@
 export type Ride = {
   /** Stable row key for favorites and detail views. */
   id: string;
-  /** ISO calendar date, normalized from the Sheet. */
+  /** ISO calendar date, normalized from the database record. */
   date: string;
   /** Optional local clock time when the source row contains one. */
   startTime: string | null;

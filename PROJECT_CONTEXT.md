@@ -2,23 +2,27 @@
 
 ## Product
 
-RideScope is a public cycling analytics dashboard for a Strava activity export held in the site owner's private Google Sheet. Visitors do not sign in. The public read-only `/api/rides` endpoint returns the rows displayed by the site, so only ride information intended for public viewing should be stored in that Sheet/range. The server reads the Sheet with a read-only service account through keyless Vercel Workload Identity Federation (WIF); the browser never receives Google credentials.
+RideScope is a public cycling analytics dashboard for a Strava activity export stored in PostgreSQL. Visitors do not sign in. The public, read-only `/api/rides` endpoint returns the rows displayed by the site, so only ride information intended for public viewing should be stored in the database. The server uses `DATABASE_URL`; the browser never receives database credentials.
 
 ## Architecture and key files
 
-- `server/index.js` reads the private ride Sheet server-side with Google Sheets API and provides `/api/rides` and `/api/health`. There is no visitor OAuth, session, sign-in logging, or logout flow.
+- `server/index.js` reads the PostgreSQL `rides` table server-side and provides `/api/rides` and `/api/health`.
+- `db/schema.sql` defines the table and date index.
+- `scripts/import-csv.js` validates and replaces the table contents from the supplied Strava CSV.
 - Root `index.js` exports the Express app to Vercel; `vercel.json` runs the build.
 - Vite writes production assets to `public/` for Vercel's static asset CDN.
-- `src/sheets.ts` calls the public app API and builds the client-side dataset.
+- `src/data.ts` calls the public app API and builds the client-side dataset.
 - `src/analytics.ts` parses and normalizes ride rows and calculates summaries.
 - `src/main.ts` owns navigation, dashboard state, views, charts, favorites, ride details, and CSV export.
 - `src/types.ts` defines the shared ride and analytics types.
 - `src/styles.css` contains the visual system, components, responsive layout, and motion preferences.
 - `index.html` loads Google Sans from Google Fonts.
 
-## Sheet columns
+## Data model
 
-The default source range is columns `A:K`: date/time, elapsed time, moving time, distance in km, elevation in m, average speed, maximum speed, device, maximum heart rate, average heart rate, and bike name. The first row is a header. Dates are parsed as local calendar components to avoid UTC day shifts.
+The CSV importer expects, in order: `Date`, `Elapsed_Time`, `Moving_Time`, `Distance`, `Elevation`, `Avg_Speed`, `Max_Speed`, `Device`, `HR_max`, `HR_mean`, and `Bike`. Date and time are stored separately. PostgreSQL generates each row's `id`, so manual entries through the table editor need no technical ID. Rows are queried by ID, keeping the import order stable.
+
+Dates are parsed as local calendar components to avoid UTC day shifts. Blank optional numbers and text become SQL `NULL`. Date-only rows do not receive invented start times.
 
 ## Analytics behavior
 
@@ -36,10 +40,8 @@ Google Sans is used throughout. The app has light and dark themes and six accent
 
 ## Privacy and configuration
 
-The dashboard is public by design. The cycling Sheet itself stays private and is shared with the server's service account as Viewer. Its rows are exposed through `/api/rides`, so do not include fields that should remain private. No visitor account or email is collected. Use Vercel WIF instead of a stored service-account key, and do not commit `.env`, `.env.local`, or deployment credentials.
-
-Required server settings are `STRAVA_SHEET_ID`, `GCP_SERVICE_ACCOUNT_EMAIL`, `GCP_PROJECT_NUMBER`, `GCP_WORKLOAD_IDENTITY_POOL_ID`, and `GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID`. `STRAVA_SHEET_RANGE` optionally selects an explicit tab/range. The Vite client proxies `/api` to the local Express server during development.
+The deployed dashboard is public by design. The `rides` table is not directly accessible from the browser, but the public `/api/rides` endpoint exposes all rows to visitors. No visitor account or email is collected. Keep the database connection string out of source control and Vite client code; configure `DATABASE_URL` in `.env.local` for local development and Vercel Environment Variables for deployment. The client fetches on page load and manual Sync, then checks for updates once per minute while visible.
 
 ## Vercel deployment
 
-The `sparsh_rides` Vercel project uses `feature/ember-red-ui` as its Production Branch. Configure Vercel OIDC with a Google Cloud workload identity pool/provider. Allow only the intended Vercel production subject to impersonate the dedicated service account, grant it `roles/iam.workloadIdentityUser`, and share the ride Sheet with that account as Viewer. Never create or commit a service-account key.
+The Vercel project should connect to a Neon PostgreSQL database through the Vercel Marketplace integration. The integration provides `DATABASE_URL` to the selected deployment environments. After connecting it or importing updated ride data, redeploy and check `/api/health` for database readiness and ride count.

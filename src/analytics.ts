@@ -50,7 +50,7 @@ function num(v: unknown): number | null {
 
 type ParsedDate = { date: Date; time: string | null };
 
-/** Parse the date formats commonly exported from Strava/Sheets without timezone drift. */
+/** Parse the date formats commonly exported from Strava without timezone drift. */
 function parseDateParts(value: unknown): ParsedDate | null {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
