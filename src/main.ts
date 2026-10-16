@@ -726,7 +726,7 @@ function lineChart(
       <defs><linearGradient id="${id}" x1="0" x2="1"><stop offset="0" stop-color="${color}" stop-opacity=".28"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
       <path d="M${padX},${height - padBottom} H${width - padX}" class="chart-axis"/>
       <path d="${area}" fill="url(#${id})"/>
-      <path d="${path}" fill="none" stroke="${color}" stroke-width="2.5" vector-effect="non-scaling-stroke"/>
+      <path d="${path}" fill="none" stroke="${color}" stroke-width="2.5" pathLength="1" vector-effect="non-scaling-stroke"/>
       ${points.map((point, index) => point ? `<circle cx="${point[0]}" cy="${point[1]}" r="4" class="chart-point" data-tooltip="${escapeHtml(`${labels[index] ?? ""} · ${formatter(values[index] ?? 0)}`)}"/>` : "").join("")}
       <text x="${padX}" y="${height - 7}" class="chart-label">${escapeHtml(firstLabel)}</text>
       <text x="${width / 2}" y="${height - 7}" text-anchor="middle" class="chart-label">${escapeHtml(middleLabel)}</text>
@@ -738,7 +738,7 @@ function lineChart(
 function barChart(items: Array<{ label: string; value: number; detail?: string }>, formatter: (value: number) => string, tone = "cyan", extraClass = ""): string {
   const max = Math.max(...items.map(item => item.value), 1);
   if (!items.length || items.every(item => item.value === 0)) return `<div class="chart-empty">No activity recorded for this view.</div>`;
-  return `<div class="bar-chart ${tone} ${extraClass}">${items.map(item => `<div class="bar-column" data-tooltip="${escapeHtml(`${item.label} · ${formatter(item.value)}${item.detail ? ` · ${item.detail}` : ""}`)}"><div class="bar-value">${formatter(item.value)}</div><div class="bar-track"><i style="height:${Math.max(item.value ? 5 : 0, (item.value / max) * 100)}%"></i></div><span>${escapeHtml(item.label)}</span></div>`).join("")}</div>`;
+  return `<div class="bar-chart ${tone} ${extraClass}">${items.map((item, index) => `<div class="bar-column" data-tooltip="${escapeHtml(`${item.label} · ${formatter(item.value)}${item.detail ? ` · ${item.detail}` : ""}`)}"><div class="bar-value">${formatter(item.value)}</div><div class="bar-track"><i style="--bar-index:${index};height:${Math.max(item.value ? 5 : 0, (item.value / max) * 100)}%"></i></div><span>${escapeHtml(item.label)}</span></div>`).join("")}</div>`;
 }
 
 function ringChart(value: number, total: number, label: string, color = "cyan"): string {

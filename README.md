@@ -1,107 +1,154 @@
 # RideScope
 
-RideScope is a cycling analytics dashboard for a Strava activity export stored in PostgreSQL. The browser calls a read-only API on the app server; database credentials never enter the client bundle.
+RideScope turns a Strava activity export into a polished, interactive cycling dashboard. Ride records live in Neon PostgreSQL, the server reads them through a private connection, and the website refreshes its view automatically.
 
-## Features
+**Live dashboard:** [sparshrides.vercel.app](https://sparshrides.vercel.app)
 
-- Overview of distance, climbing, ride frequency, and personal records.
-- Calendar heatmap based on distance ridden.
-- Ride explorer with search, filters, sorting, favorites, details, and CSV export.
-- Bike, performance, weekly, monthly, and heart-rate analytics.
-- Browser-stored personal goals, light/dark themes, and six color palettes.
-- Responsive layout with keyboard and reduced-motion support.
-
-## Data flow
+## How ride data reaches the site
 
 ```text
-CSV export ── one-time import ──► PostgreSQL (Neon)
-                                       │
-                                       ▼
-                              RideScope server
-                                       │
-                             public read-only API
-                                       ▼
-                                  Dashboard
+Add or edit a ride in Neon
+          ↓
+      Neon Postgres
+          ↓  server-side DATABASE_URL
+      RideScope API
+          ↓  public, read-only response
+       Dashboard
 ```
 
-The dashboard API is public and returns ride rows to every visitor. Keep only data in the database that you are comfortable showing on the deployed site. The database itself stays protected by its server-side connection string. There are no visitor accounts or write endpoints.
+The normal workflow is simple: add a row in Neon’s table editor, save it, and RideScope picks it up on its next sync. While the site is open, it checks for database changes about once a minute. Use **Sync** to refresh immediately, or reload the page. Adding a ride does not require a code change, CSV import, or Vercel deployment.
 
-## Connect PostgreSQL on Vercel
+> **Privacy:** RideScope has no visitor sign-in. Its read-only `GET /api/rides` endpoint returns the ride data used by the dashboard to anyone who visits the site. Store only information you are comfortable making public. The database connection string stays on the server and is never sent to the browser.
 
-RideScope uses Neon Postgres, which can be added to a Vercel project through the [Vercel Marketplace](https://vercel.com/marketplace/neon/neon). The integration makes the database available to the project as `DATABASE_URL`.
+## Add a ride
 
-1. In the Vercel dashboard, open this project and add Neon from **Storage** or the Marketplace. Choose the project and environments that should get the database connection.
-2. Confirm that `DATABASE_URL` is available for **Production**. If you want Preview deployments to work too, include **Preview**.
-3. In the Neon console, open the SQL editor. You can inspect and manage the imported rows there with ordinary SQL, for example `SELECT * FROM rides ORDER BY ride_date;`.
-4. After the import below, redeploy the Vercel app so Production uses the new code and database environment variable.
+1. Open the project’s Neon database and select the `rides` table.
+2. Open the table editor and add a row.
+3. Enter the ride’s date and any available metrics. Leave `id` blank; PostgreSQL generates it.
+4. Save the row, then wait for the next automatic sync or press **Sync** on the dashboard.
 
-Vercel's storage integrations provision databases and inject their credentials as environment variables. See [Vercel Marketplace storage](https://vercel.com/docs/marketplace-storage) and [Neon on Vercel](https://vercel.com/marketplace/neon/neon).
+The required field is `ride_date`. Time, duration, distance, elevation, speed, heart rate, device, and bike can be left empty when unknown. Do not estimate missing values; blank optional values are handled as unavailable data.
 
-## Import the CSV
+The `rides` table is also manageable with SQL in Neon’s SQL editor. For example, inspect recent rides with:
 
-The importer accepts the supplied Strava CSV format and creates the `rides` table if it does not exist. Use it once to seed the initial 223 rides. It replaces the rows already in that table, so it requires the explicit `--replace` flag. **Do not rerun it to add new rides**; enter those directly in the hosted table editor.
-
-For a local import, put the pooled Neon connection string in `.env.local` (never commit this file):
-
-```dotenv
-DATABASE_URL=postgresql://user:password@host/dbname?sslmode=require
+```sql
+SELECT id, ride_date, distance, elevation, bike
+FROM rides
+ORDER BY ride_date DESC, id DESC
+LIMIT 20;
 ```
 
-Then run:
+## Dashboard features
 
-```bash
-npm install
-npm run db:import -- --replace "/path/to/Strava dataset.csv"
-```
+- Overview of ride distance, elevation, frequency, pace, recent activity, and personal records.
+- Calendar heatmap, weekly and monthly trends, and ride-by-ride exploration.
+- Bike, consistency, goal, performance, terrain, time-of-day, and heart-rate views.
+- Search, sorting, filters, favorites, ride details, and CSV export.
+- Light and dark themes, six accent palettes, and personal goals saved in the browser.
+- Responsive layouts, keyboard-friendly controls, and reduced-motion support.
 
-The command validates the CSV before changing the database and reports the number of imported rows. It does not print ride contents or the connection string. The table layout is also documented in [`db/schema.sql`](db/schema.sql).
+Some analytics need complete source data. For example, hour-of-day charts need a real start time; date-only rides stay date-only rather than receiving an invented time.
 
-After the initial import, add one ride per row in the Neon table editor. Fill in the ride fields and leave `id` blank; PostgreSQL generates it. The deployed app reads the database on page load, when you use **Sync**, and automatically checks for changes about once a minute while the page is open. Adding a ride does not require another import or deployment. You can view or edit the records in Neon, or run SQL such as `SELECT * FROM rides ORDER BY ride_date;`.
+## Database and deployment setup
 
-You can verify the connection and import at `/api/health`; it reports whether the database is configured and how many rides are present. `/api/rides` returns the rows used by the dashboard.
+The production deployment uses Neon PostgreSQL through the Vercel Marketplace integration. Vercel provides the server with `DATABASE_URL` for the environments selected in the integration. The application does not need or use Google Sheets.
 
-## Run locally
+To connect a new deployment:
+
+1. Add Neon to the Vercel project from the Vercel Marketplace and choose the required environments (Production, and Preview if desired).
+2. Confirm the project has a `DATABASE_URL` environment variable. Keep it server-side; do not add it to frontend code or a `VITE_` variable.
+3. Create the `rides` table using [`db/schema.sql`](db/schema.sql), or run the CSV importer below, which creates the table if needed.
+4. Deploy the app and open `/api/health`. A working connection returns `databaseReady: true` and a `rideCount`.
+
+The existing production app is at [sparshrides.vercel.app](https://sparshrides.vercel.app). Useful live checks:
+
+- [Database health and ride count](https://sparshrides.vercel.app/api/health)
+- [Read-only ride data API](https://sparshrides.vercel.app/api/rides)
+
+## Initial CSV import
+
+Use the importer to load or intentionally replace the initial dataset. It validates the full file before modifying the table. The `--replace` flag is required because this operation truncates existing rows and resets generated IDs. **Do not run this command just to add one new ride**; use the Neon table editor instead.
+
+1. Install the project dependencies as described under [Local development](#local-development).
+2. Create a `.env.local` file in the project root containing your Neon connection string:
+
+   ```dotenv
+   DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+   ```
+
+3. Run the importer with the CSV path:
+
+   ```bash
+   npm run db:import -- --replace "/path/to/Strava dataset.csv"
+   ```
+
+The importer reports the number of imported rows without printing the ride contents or database connection string. Never commit `.env.local` or paste a database URL into source code.
+
+## Local development
+
+Requirements: Node.js and npm.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. Vite proxies `/api` requests to the Express server at `http://127.0.0.1:8787`. Set `DATABASE_URL` in `.env.local` to use your hosted database locally.
+Open [http://localhost:5173](http://localhost:5173). Vite serves the frontend and proxies `/api` requests to the local Express server. Set `DATABASE_URL` in `.env.local` if the local app should read your Neon database. Without it, the server starts but the ride API reports that PostgreSQL is not configured.
 
 Useful commands:
 
 ```bash
-npm run typecheck
-npm run build
-npm start
+npm run build       # type-check and create the production frontend in public/
+npm run typecheck   # TypeScript checks only
+npm start           # run the production Express app locally
+npm run db:import -- --replace "/path/to/rides.csv"  # replace all database rows
 ```
 
-## CSV format
+## Data model
 
-The importer expects these headers in this order:
+The importer expects a CSV with these exact headers, in this order:
 
-| CSV column | Stored field | Meaning |
+| CSV header | Database column | Meaning |
 | --- | --- | --- |
-| `Date` | `ride_date`, `start_time` | `DD/MM/YYYY` or `YYYY-MM-DD`, optionally with a clock time |
-| `Elapsed_Time` | `elapsed_time` | Elapsed duration |
+| `Date` | `ride_date`, `start_time` | `YYYY-MM-DD` or `DD/MM/YYYY`, optionally followed by a time |
+| `Elapsed_Time` | `elapsed_time` | Total elapsed duration |
 | `Moving_Time` | `moving_time` | Moving duration |
-| `Distance` | `distance` | Distance in km |
-| `Elevation` | `elevation` | Elevation gain in m |
-| `Avg_Speed` | `avg_speed` | Average speed |
-| `Max_Speed` | `max_speed` | Maximum speed |
+| `Distance` | `distance` | Kilometres |
+| `Elevation` | `elevation` | Metres climbed |
+| `Avg_Speed` | `avg_speed` | Average speed from the source |
+| `Max_Speed` | `max_speed` | Maximum speed from the source |
 | `Device` | `device` | Recording device |
-| `HR_max` | `hr_max` | Maximum heart rate |
-| `HR_mean` | `hr_mean` | Average heart rate |
+| `HR_max` | `hr_max` | Maximum recorded heart rate |
+| `HR_mean` | `hr_mean` | Average recorded heart rate |
 | `Bike` | `bike` | Bike name |
 
-Blank optional values are stored as SQL `NULL`. The current dataset has date-only rides, so the hour-of-day analysis remains empty until real start times are included in the source data.
+PostgreSQL generates the `id`. `ride_date` is required; `start_time` and metric fields may be `NULL`. The schema and date index are in [`db/schema.sql`](db/schema.sql). Blank CSV values become `NULL`. CSV dates are interpreted as local calendar dates to avoid shifting a ride to another day.
 
 ## API
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/rides` | Reads the PostgreSQL `rides` table and returns the rows used by the dashboard. Public and read-only. |
-| `GET /api/health` | Checks database configuration, table readiness, and ride count without revealing credentials. |
+| `GET /api/rides` | Returns the rows used by the dashboard. Public and read-only. Responses use `Cache-Control: no-store`. |
+| `GET /api/health` | Reports whether the database is configured and reachable, and how many rides are present. It does not return credentials. |
 
-API responses are marked `no-store` so a manual refresh reads the latest database contents.
+## Project structure
+
+| Path | Responsibility |
+| --- | --- |
+| `src/main.ts` | Navigation, views, charts, dashboard state, ride details, and CSV export |
+| `src/analytics.ts` | Ride normalization and derived analytics |
+| `src/data.ts` | Loads ride rows from the application API |
+| `src/types.ts` | Shared ride and analytics types |
+| `src/styles.css` | Themes, responsive components, and animation system |
+| `server/index.js` | Express API and server-side Neon queries |
+| `db/schema.sql` | PostgreSQL table and index definition |
+| `scripts/import-csv.js` | Validated, explicit CSV replacement import |
+| `vercel.json` | Vercel build and function configuration |
+
+## Troubleshooting
+
+- **Dashboard says the database is not configured:** confirm `DATABASE_URL` is available to the Vercel Production environment, then redeploy.
+- **Health check says the database is not ready:** confirm the database is reachable and the `rides` table exists. Open the Vercel function logs for server-side error details.
+- **The ride count is zero or a ride is missing:** check the Neon `rides` table and confirm the row was saved. Press **Sync** or reload the dashboard.
+- **Changes are not visible yet:** the open page checks about once a minute; use **Sync** to fetch immediately. API responses are not cached.
+- **A view is empty:** some charts require optional source values. Date-only rows, for example, do not appear in time-of-day analytics.
