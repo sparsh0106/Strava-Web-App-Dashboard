@@ -2,41 +2,44 @@
 
 ## Product
 
-RideScope is a cycling dashboard for a Strava activity export in the site owner's Google Sheet. Visitors sign in with their own Google accounts using identity-only OAuth scopes. A server-owned service account reads the owner's ride Sheet and appends each successful visitor sign-in (verified email and UTC timestamp) to a separate log spreadsheet. The browser receives ride rows and calculates analytics locally; it never receives Google API credentials.
+RideScope is a public cycling analytics dashboard for a Strava activity export held in the site owner's private Google Sheet. Visitors do not sign in. The public read-only `/api/rides` endpoint returns the rows displayed by the site, so only ride information intended for public viewing should be stored in that Sheet/range. The server reads the Sheet with a read-only service account through keyless Vercel Workload Identity Federation (WIF); the browser never receives Google credentials.
 
 ## Architecture and key files
 
-- `server/index.js` verifies Google ID tokens, handles encrypted sessions, appends sign-in rows, reads the cycling Sheet with a server service account, and serves health checks.
+- `server/index.js` reads the private ride Sheet server-side with Google Sheets API and provides `/api/rides` and `/api/health`. There is no visitor OAuth, session, sign-in logging, or logout flow.
 - Root `index.js` exports the Express app to Vercel; `vercel.json` runs the build.
 - Vite writes production assets to `public/` for Vercel's static asset CDN.
-- `src/sheets.ts` calls the app API and normalizes the returned dataset boundary.
-- `src/analytics.ts` parses local dates, normalizes ride rows, and computes dataset and trend summaries.
-- `src/main.ts` owns hash navigation, dashboard state, view rendering, charts, favorites, ride details, and CSV export.
+- `src/sheets.ts` calls the public app API and builds the client-side dataset.
+- `src/analytics.ts` parses and normalizes ride rows and calculates summaries.
+- `src/main.ts` owns navigation, dashboard state, views, charts, favorites, ride details, and CSV export.
 - `src/types.ts` defines the shared ride and analytics types.
-- `src/styles.css` contains the visual system, component styling, responsive layouts, and motion preferences.
-- `index.html` loads the app and Google Sans from Google Fonts.
+- `src/styles.css` contains the visual system, components, responsive layout, and motion preferences.
+- `index.html` loads Google Sans from Google Fonts.
 
 ## Sheet columns
 
-The default source is columns `A:K`: date/time, elapsed time, moving time, distance in km, elevation in m, average speed, maximum speed, device, maximum heart rate, average heart rate, and bike name. The first row is a header. Date parsing uses local calendar components to avoid UTC day shifts.
+The default source range is columns `A:K`: date/time, elapsed time, moving time, distance in km, elevation in m, average speed, maximum speed, device, maximum heart rate, average heart rate, and bike name. The first row is a header. Dates are parsed as local calendar components to avoid UTC day shifts.
 
 ## Analytics behavior
 
-- Mean and median are calculated from rides with a recorded distance.
-- Mode rounds distances to 0.1 km and is shown only when there is a unique repeated value.
+- Mean and median use rides with recorded distance.
+- Mode rounds distances to 0.1 km and appears only when there is a unique repeated value.
 - Weekly and monthly averages divide recorded distance by active weeks/months in the selected scope.
-- The seven-day daily average uses today plus the preceding six local calendar days and divides by all seven days.
-- Calendar heat is based on summed moving time by date; elapsed time is the fallback when moving time is missing.
-- Selecting a calendar date opens `#ride-detail?date=YYYY-MM-DD`, which lists every ride and available metric for that date.
-- Cycle cards include average distance per ride, calculated from rows with recorded distance.
-- Overview includes an interactive weekly distance chart; chart marks expose hover tooltips.
+- The seven-day daily average uses today plus the previous six local calendar days and divides by seven.
+- Calendar heat and month totals are based on distance ridden.
+- Selecting a calendar date opens `#ride-detail?date=YYYY-MM-DD` with that date's rides and available metrics.
+- Cycle cards include average distance per ride; overview includes an interactive weekly distance chart.
 
 ## Visual and interaction direction
 
-Use a warm light surface or a charcoal dark surface with a vermilion red accent. Google Sans is used throughout, including compact numerical labels. The light/dark theme toggle persists the user's choice in browser `localStorage`; light is the default. Layouts should reflow for phones, preserve keyboard focus states, and respect reduced-motion settings. Keep cycling performance views centered on the recorded activity metrics and distance summaries.
+Google Sans is used throughout. The app has light and dark themes and six accent palettes (Ember, Ocean, Forest, Lavender, Rose, Citrus). Theme, palette, favorites, and personal goals are stored in browser `localStorage`. Layouts reflow for phones, preserve keyboard focus states, and respect reduced-motion settings.
 
-Favorites, personal goals, and theme preference stay in browser `localStorage`. Never commit `.env`, `.env.local`, OAuth secrets, or deployment credentials. The app uses keyless workload identity rather than a stored service-account key. Share the cycling spreadsheet with the service account as Viewer and use a separate spreadsheet for sign-in logs, shared as Editor. The Vite client proxies API routes to the Express server during development.
+## Privacy and configuration
+
+The dashboard is public by design. The cycling Sheet itself stays private and is shared with the server's service account as Viewer. Its rows are exposed through `/api/rides`, so do not include fields that should remain private. No visitor account or email is collected. Use Vercel WIF instead of a stored service-account key, and do not commit `.env`, `.env.local`, or deployment credentials.
+
+Required server settings are `STRAVA_SHEET_ID`, `GCP_SERVICE_ACCOUNT_EMAIL`, `GCP_PROJECT_NUMBER`, `GCP_WORKLOAD_IDENTITY_POOL_ID`, and `GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID`. `STRAVA_SHEET_RANGE` optionally selects an explicit tab/range. The Vite client proxies `/api` to the local Express server during development.
 
 ## Vercel deployment
 
-The `sparsh_rides` Vercel project uses `feature/ember-red-ui` as its Production Branch. The serverless-compatible session middleware keeps OAuth state, nonce, and verified identity in an authenticated-encryption, HTTP-only cookie, keyed by `SESSION_SECRET`; this avoids relying on instance memory. Configure Google Workload Identity Federation between Vercel OIDC and a dedicated Google service account; do not create or store a service-account key. Set the service account email, Cloud project number, workload identity pool/provider IDs, cycling Sheet ID, and separate sign-in log Sheet ID in Vercel. Share the cycling Sheet with the service account as Viewer and the log Sheet as Editor. Authorize `https://<deployment-host>/oauth2callback` as a redirect URI in the Google OAuth client. Do not put secrets in source control or build output.
+The `sparsh_rides` Vercel project uses `feature/ember-red-ui` as its Production Branch. Configure Vercel OIDC with a Google Cloud workload identity pool/provider. Allow only the intended Vercel production subject to impersonate the dedicated service account, grant it `roles/iam.workloadIdentityUser`, and share the ride Sheet with that account as Viewer. Never create or commit a service-account key.

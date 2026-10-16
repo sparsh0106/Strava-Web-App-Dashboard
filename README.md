@@ -1,361 +1,97 @@
 # RideScope
 
-**RideScope** is an interactive cycling analytics dashboard for a Strava activity export stored in the site owner's Google Sheet. Visitors sign in with their own Google accounts; the app uses a server-owned service account to read ride data and log each successful sign-in.
+RideScope is a cycling analytics dashboard for a Strava activity export stored in a Google Sheet. The dashboard opens directly; visitors do not need to sign in, and the site does not collect visitor Google accounts or emails.
 
-It turns a simple Sheet into a clear command center for distance, climbing, consistency, performance, bike usage, and ride-level exploration. Google identity verification and all Sheet API calls stay on the Node server; the browser only receives the rows needed to calculate local analytics. The sign-in screen discloses that successful sign-ins are logged with a verified email and UTC time, and that signed-in visitors can view the dashboard's ride data.
+The Google Sheet stays private. The server reads it with a dedicated, read-only service account through Vercel Workload Identity Federation (WIF). Ride rows are then served by the public dashboard API, so anyone who can visit the site can view the ride data shown in the dashboard.
 
----
+## Features
 
-## What it does
+- Overview of distance, climbing, ride frequency, and personal records.
+- Calendar heatmap based on distance ridden.
+- Ride explorer with search, filters, sorting, favorites, details, and CSV export.
+- Bike, performance, weekly, monthly, and heart-rate analytics.
+- Browser-stored personal goals, light/dark themes, and six color palettes.
+- Responsive layout with keyboard and reduced-motion support.
 
-RideScope currently includes:
-
-- **Overview command center** with key stats, interactive weekly distance bars, seasonal rhythm, recent rides, and personal records.
-- **Interactive annual calendar** whose heatmap intensity and monthly totals measure distance ridden; selecting a date opens a shareable ride-details page.
-- **Distance analytics** with mean, median, mode, active-week and active-month averages, and a seven-day daily average through today.
-- **Bike analysis** with distance share, ride counts, average distance per ride, speed, elevation, and bike-specific ride filtering.
-- **Consistency analysis** with current and historical 3+ day streaks.
-- **Weekly and monthly pattern views** built from timezone-safe local calendar dates.
-- **Speed/elevation profile** with binned terrain analysis and elevation-per-kilometer statistics.
-- **Heart-rate zone view** for rows that contain average HR.
-- **Ten-ride rolling progression metrics** for average speed, moving time, and cumulative distance.
-- **Ride explorer** with search, bike filters, sorting, pagination, favorites, detail drawers, and CSV export.
-- **Personal goals** for distance, ride count, and elevation. Goals are stored in the browser and never written to the Sheet.
-- **Data-quality panel** showing coverage for distance, elevation, HR, moving time, and optional start time.
-- **Responsive mobile navigation**, accessible labels and focus states, and reduced-motion support.
-
-The application is intentionally dependency-light: the charts and interaction layer use browser-native SVG, CSS, and DOM APIs.
-
-## Visual system
-
-RideScope includes light and dark modes plus six selectable accent palettes: Ember, Ocean, Forest, Lavender, Rose, and Citrus. Use the palette menu and the light/dark toggle in the top bar to customize the dashboard; both preferences are saved in this browser. Layouts reflow for phone screens, with touch-sized controls and scrollable data tables.
-
-The interface uses Google Sans from Google Fonts throughout, with system sans-serif fallbacks if the font cannot load.
-
-Compact numerical labels use tabular numerals to keep measurements aligned.
-
----
-
-## Architecture
+## How data access works
 
 ```text
-Visitor's Google account ── identity-only OAuth ──┐
-                                                  ▼
-                                    Node/Express server
-                                      │           │
-                    service account │           │ verified email + UTC time
-                         read-only  ▼           ▼ append
-                            Ride Sheet       Sign-in log Sheet
-                                      │
-                                      ▼
-                              Normalized ride rows
-                                      │
-                                      ▼
-                            TypeScript analytics
-                                      │
-                                      ▼
-                         Vite UI + SVG/CSS charts
+Private cycling Sheet
+        │ read-only, server-side WIF
+        ▼
+RideScope server ── public read-only /api/rides ──► Dashboard
 ```
 
-### Project layout
-
-```text
-.
-├── index.html                 Browser entry document
-├── index.js                   Vercel Express function entry point
-├── PROJECT_CONTEXT.md         Durable product and implementation context
-├── server/index.js            OAuth, Sheet API, session, production server
-├── src/
-│   ├── analytics.ts           Parsing, normalization, and derived analytics
-│   ├── main.ts                State, views, interactions, and rendering
-│   ├── sheets.ts              Browser API client
-│   ├── styles.css             Design system, layout, motion, responsive rules
-│   └── types.ts               Shared domain types
-├── .env.example               Safe configuration template
-├── package.json               Development and build scripts
-├── vercel.json                Vercel build configuration
-└── vite.config.ts             Vite + Tailwind + development proxy
-```
-
----
+There is no visitor OAuth flow, session cookie, sign-in log, or Google sign-out button. The browser never receives Google credentials. Since the dashboard API is public, the rows it returns should only contain ride information you are comfortable sharing publicly.
 
 ## Requirements
 
 - Node.js 20 or newer
-- A Google Cloud project
-- A Google Sheet containing a Strava activity export
-- A server service account and a separate sign-in log spreadsheet
-- A Google OAuth 2.0 **Web application** client
+- A Google Cloud project with the Google Sheets API, Security Token Service API, and IAM Service Account Credentials API enabled
+- A Google Sheet with the ride data
+- A Google service account and Vercel OIDC workload identity federation
 
-The cycling data Sheet is read-only from the application’s perspective. A separate sign-in log spreadsheet receives one email/timestamp row after each successful sign-in. The app does not write rides, goals, or settings to the cycling data Sheet.
+The service account only needs **Viewer** access to the cycling Sheet. Do not create or store a service-account key. Configure keyless access using the [Vercel GCP OIDC guide](https://vercel.com/docs/oidc/gcp).
 
----
+## Configuration
 
-## Google Cloud, service account, and sign-in setup
+Copy `.env.example` to `.env` and configure:
 
-1. Create or select a Google Cloud project.
-2. Enable the **Google Sheets API**, **Security Token Service API**, and **IAM Service Account Credentials API** in that project.
-3. Create a dedicated service account for this app. Do not create a JSON key; the app uses Vercel Workload Identity Federation (WIF) to impersonate the service account with short-lived credentials.
-4. Create two spreadsheets in the owner account:
-   - Share the cycling data spreadsheet with the service account email as **Viewer**.
-   - Create a separate sign-in log spreadsheet, share it with the service account email as **Editor**, and add a tab named `Sign-ins` with headers `Email` and `Signed in at (UTC)` in columns A and B.
+```dotenv
+STRAVA_SHEET_ID=your-cycling-data-spreadsheet-id
+STRAVA_SHEET_RANGE=
+GCP_SERVICE_ACCOUNT_EMAIL=ridescope-server@your-project.iam.gserviceaccount.com
+GCP_PROJECT_NUMBER=123456789012
+GCP_WORKLOAD_IDENTITY_POOL_ID=vercel
+GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID=vercel
+```
 
-   Keep these as separate spreadsheet files so the service account cannot write to the cycling data file.
+Set these values in the Vercel project for the production deployment as well. Configure the Google workload identity provider to trust the Vercel project’s production subject and grant that identity `roles/iam.workloadIdentityUser` on the service account. Share the cycling Sheet with that service account as Viewer. Keep `.env` and `.env.local` out of source control.
 
-5. Configure Vercel OIDC and a Google Cloud workload identity pool/provider:
-   - In the Vercel project, open **Settings → Security → Secure backend access with OpenID Connect (OIDC) federation** and enable it. Use the Team issuer mode when available; note the exact issuer URL shown there.
-   - In Google Cloud, open **IAM & Admin → Workload Identity Federation** and create a pool and an **OpenID Connect (OIDC)** provider. Use Vercel's exact issuer URL, leave the JWK file empty, and configure the provider's default audience.
-   - Set the provider's attribute mapping to `google.subject=assertion.sub`.
-   - Copy the provider's default audience URL. The server requests this audience from Vercel and uses it to exchange the Vercel token for a short-lived Google access token.
-   - Create a service account for this app if you have not already. On that service account, grant **Workload Identity User** (`roles/iam.workloadIdentityUser`) to the exact Vercel production subject `owner:YOUR_VERCEL_TEAM_SLUG:project:sparsh_rides:environment:production`. Replace the team slug and project slug with the values in your Vercel subject. Keep this binding limited to this project and environment; do not grant the whole pool access.
+If workload identity or the Sheet ID is missing, `/api/rides` will return a configuration error. The dashboard itself no longer asks visitors to sign in.
 
-   Vercel documents the issuer URL, default audience, and subject format in its [GCP OIDC setup guide](https://vercel.com/docs/oidc/gcp). Google requires the `roles/iam.workloadIdentityUser` role for a federated identity to impersonate a service account.
-
-6. Configure the OAuth consent screen for external users and create an OAuth 2.0 client ID with application type **Web application**. While the consent screen is in testing mode, only its configured test users can sign in.
-7. Add this local redirect URI:
-
-   ```text
-   http://localhost:8787/oauth2callback
-   ```
-
-8. Copy `.env.example` to `.env` and fill in the OAuth client, WIF, and spreadsheet values:
-
-   ```dotenv
-   GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-   GOOGLE_CLIENT_SECRET=your-client-secret
-   GOOGLE_REDIRECT_URI=http://localhost:8787/oauth2callback
-   SESSION_SECRET=use-a-long-random-value
-   GCP_SERVICE_ACCOUNT_EMAIL=ridescope-server@your-project.iam.gserviceaccount.com
-   GCP_PROJECT_NUMBER=123456789012
-   GCP_WORKLOAD_IDENTITY_POOL_ID=vercel
-   GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID=vercel
-   STRAVA_SHEET_ID=your-cycling-data-spreadsheet-id
-   STRAVA_SHEET_RANGE=
-   SIGNIN_LOG_SHEET_ID=your-separate-sign-in-log-spreadsheet-id
-   SIGNIN_LOG_SHEET_RANGE='Sign-ins'!A:B
-   ```
-
-For local WIF development, link the checkout with the Vercel CLI and run `vercel env pull .env.local`. The `.env.local` file is ignored by Git. Allow the exact Vercel `development` subject to impersonate a development service account if local API access is needed; the production-only subject above intentionally does not authorize local development.
-
-Visitors grant only the `openid` and `email` identity scopes. Their Google accounts do not need access to either spreadsheet. The server verifies the ID token and verified-email claim, records `[email, ISO-8601 UTC timestamp]` in the log spreadsheet, and then creates the session. If logging fails, sign-in is not completed. OAuth client secrets and WIF settings are only read by the Node server and are never bundled into the Vite frontend. Google Sheets access uses the dedicated service account, while Vercel OIDC replaces a long-lived service-account key with short-lived credentials.
-
----
-
-## Local development
-
-Install dependencies:
+## Run locally
 
 ```bash
 npm install
-```
-
-Start both the Vite client and the API server:
-
-```bash
 npm run dev
 ```
 
-Open:
+Open `http://localhost:5173`. The Vite client proxies `/api` requests to the Express server at `http://localhost:8787`. The ride API needs valid server-side Google Sheets access to load data.
 
-- Frontend: `http://localhost:5173`
-- API/OAuth server: `http://localhost:8787`
-
-Vite proxies `/auth`, `/oauth2callback`, `/api`, and `/logout` to the Node server.
-
-Useful checks:
+Useful commands:
 
 ```bash
 npm run typecheck
 npm run build
-npm run check
-```
-
-`npm run check` runs the TypeScript check and a production Vite build.
-
----
-
-## Production
-
-Build the frontend:
-
-```bash
-npm run build
-```
-
-Start the combined server:
-
-```bash
 npm start
 ```
 
-The production Express server serves both `public/` and the API from one origin. The `start` script is cross-platform and sets `NODE_ENV=production` before loading the server. Vercel serves the Vite build from `public/` through its CDN and runs the root Express export as a serverless function.
+## Google Sheet format
 
-### Deploying to Vercel
+By default, RideScope reads columns `A:K` from the first tab. The first row is a header.
 
-The `sparsh_rides` Vercel project uses `feature/ember-red-ui` as its Production Branch. The included `vercel.json` selects the Express runtime and runs the production Vite build.
+| Column | Meaning |
+| --- | --- |
+| A | Ride date, optionally with start time |
+| B | Elapsed time |
+| C | Moving time |
+| D | Distance in km |
+| E | Elevation gain in m |
+| F | Average speed |
+| G | Maximum speed |
+| H | Device |
+| I | Maximum heart rate |
+| J | Average heart rate |
+| K | Bike name |
 
-Set these environment variables in the Vercel project for the deployment environments you use:
+Dates in `DD/MM/YYYY` and `YYYY-MM-DD` formats are supported. Date-only rows work; the hour-of-day view needs a recorded start time.
 
-```dotenv
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-GOOGLE_REDIRECT_URI=https://your-project.vercel.app/oauth2callback
-SESSION_SECRET=...
-GCP_SERVICE_ACCOUNT_EMAIL=...
-GCP_PROJECT_NUMBER=...
-GCP_WORKLOAD_IDENTITY_POOL_ID=...
-GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID=...
-STRAVA_SHEET_ID=...
-STRAVA_SHEET_RANGE=
-SIGNIN_LOG_SHEET_ID=...
-SIGNIN_LOG_SHEET_RANGE='Sign-ins'!A:B
-```
-
-Add the deployed callback URL to the Google OAuth client's authorized redirect URIs. Share the cycling spreadsheet with the service account as Viewer and the separate sign-in log spreadsheet as Editor. OAuth state, nonce, and verified identity are held in a short-lived, authenticated-encryption cookie, so sign-in does not depend on serverless instance memory. Visitor access/refresh tokens are not retained. Keep `SESSION_SECRET` stable across deployments; rotating it signs out existing sessions.
-
----
-
-## Source Sheet format
-
-The default range is the first tab, columns `A:K`:
-
-| Column | Meaning | Example |
-| --- | --- | --- |
-| A | Ride date, optionally followed by time | `04/07/2025 06:35` |
-| B | Elapsed time | `01:42:18` |
-| C | Moving time | `01:31:05` |
-| D | Distance (km) | `42.73` |
-| E | Elevation gain (m) | `684` |
-| F | Average speed (km/h) | `28.1` |
-| G | Maximum speed (km/h) | `51.8` |
-| H | Device | `Garmin Edge 830` |
-| I | Maximum heart rate | `176` |
-| J | Average heart rate | `148` |
-| K | Bike name | `Firefox MTB` |
-
-The first row is treated as a header. Date-only rows are fully supported. If column A includes a clock time, RideScope enables the hour-of-day view; otherwise that page explains why it remains intentionally blank rather than fabricating a time.
-
-Both `DD/MM/YYYY` and `YYYY-MM-DD` date prefixes are recognized. Dates are parsed into local calendar components so weekday and month analytics do not drift because of UTC parsing.
-
----
-
-## Analytics notes
-
-### Distance summary definitions
-
-- **Mean and median** use recorded ride distances; rows with a missing distance are excluded.
-- **Mode** groups distances to the nearest 0.1 km and displays a value only when it is the unique most common repeated distance.
-- **Weekly and monthly averages** divide the recorded distance total by the number of active calendar weeks or months in the selected scope.
-- **Seven-day average** is the total distance from today and the previous six local calendar days divided by seven, so rest days count as zero-distance days.
-- **Calendar heat** compares each day’s total recorded ride distance with the longest-distance day in the selected year. Month totals also show distance; moving time remains available in the day details.
-
-### Rolling progression
-
-The progression view uses the current ride and up to nine previous rides. This rolling ten-ride window is less noisy than a single-ride comparison. Cumulative distance is shown separately to preserve training-volume context.
-
-### Data quality
-
-Missing values are preserved as missing rather than silently converted to zero. The rail reports coverage for distance, elevation, heart rate, moving time, and optional start time.
-
----
-
-## Browser-only behavior
-
-The following preferences are stored in `localStorage` and never leave the browser:
-
-- Favorite ride IDs
-- Personal goal targets
-- Light or dark theme preference
-- Color palette preference
-
-The current page is represented in the URL hash, so browser Back/Forward navigation works between dashboard views.
-
-CSV export respects the active year/all-time scope, bike filter, search query, and sort order. The export is generated locally in the browser.
-
----
-
-## API endpoints
+## API
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/auth/status` | Reports whether the session has a verified Google identity. |
-| `GET /auth/google` | Starts the Google OAuth flow. |
-| `GET /oauth2callback` | Validates OAuth state and ID-token identity, appends the sign-in row, and creates the session. |
-| `GET /api/rides` | Reads the cycling Sheet with the server service account and returns rows plus sync time. |
-| `POST /logout` | Destroys the current session. |
-| `GET /api/health` | Lightweight server health check. |
+| `GET /api/rides` | Reads the configured Sheet and returns the rows used by the dashboard. Public and read-only. |
+| `GET /api/health` | Reports server health and whether Sheet access is configured. |
 
-API responses are marked `no-store` so a sync does not get confused with a cached response.
-
----
-
-## Privacy and production hardening
-
-The application encrypts Google identity and OAuth state into a short-lived, HTTP-only cookie. Each successful sign-in appends the visitor's verified email and UTC timestamp to the owner's separate log spreadsheet. Before deploying publicly:
-
-- Store `SESSION_SECRET` in a secret manager.
-- Configure the OAuth consent screen for external accounts; use its test-user controls until the app is ready for broader access.
-- Use HTTPS and set the production environment securely.
-- Keep `.env` out of source control; it is already ignored.
-- Add rate limiting and centralized request logging at the deployment edge.
-
-The frontend never receives the Google OAuth client secret.
-
----
-
-## Browser support and accessibility
-
-The dashboard works in modern evergreen browsers. Enhancements are progressive:
-
-- View Transitions are used when supported.
-- `prefers-reduced-motion` disables nonessential animation.
-- Focus-visible outlines, semantic landmarks, labels, and Escape-to-close behavior are included.
-- Charts expose labels/tooltips and remain understandable without animation.
-
----
-
-## Troubleshooting
-
-### The app asks to connect again
-
-The OAuth session expires after 12 hours or if `SESSION_SECRET` changes. Sign in again to create a new session.
-
-### The Sheet loads but no rides appear
-
-Check that:
-
-- The first row is a header.
-- Column A contains valid dates.
-- The date format is recognized.
-- The Sheet contains values in the expected columns.
-- The selected Google account can access the Sheet.
-
-Then use **Sync** in the top bar.
-
-### Hour-of-day is blank
-
-This is expected when column A contains dates without clock times. Add a time to the source date or add a dedicated time column and extend the normalizer before relying on that view.
-
----
-
-## Development workflow
-
-Work on a feature branch, keep commits focused, and run the checks before pushing:
-
-```bash
-git switch -c feature/your-change
-npm run check
-git add <files>
-git commit -m "feat: describe the change"
-git push -u origin feature/your-change
-```
-
-Recommended commit prefixes:
-
-- `feat:` — new user-facing functionality
-- `fix:` — bug fix
-- `refactor:` — internal cleanup without behavior change
-- `docs:` — documentation and project guidance
-- `chore:` — tooling or maintenance
-
-Do not commit `.env`, OAuth secrets, session secrets, or generated `dist/` files.
+API responses are marked `no-store` so a manual sync reads the latest Sheet contents.

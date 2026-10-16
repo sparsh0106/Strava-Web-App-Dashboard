@@ -13,10 +13,7 @@ import {
   rideDurationHours
 } from "./analytics";
 import {
-  connectGoogle,
   fetchDataset,
-  getAuthStatus,
-  logoutGoogle,
   type DatasetResult
 } from "./sheets";
 
@@ -71,7 +68,6 @@ type AppState = {
   scope: Scope;
   loading: boolean;
   syncing: boolean;
-  connected: boolean;
   error: string | null;
   lastSynced: string | null;
   search: string;
@@ -305,7 +301,6 @@ const state: AppState = {
   scope: "year",
   loading: true,
   syncing: false,
-  connected: false,
   error: null,
   lastSynced: null,
   search: "",
@@ -495,43 +490,25 @@ function emptyPanel(title: string, message: string, action = ""): string {
 }
 
 function loadingView(): string {
-  return `<div class="auth-layout reveal">
-    <div class="auth-card auth-card--loading">
-      <div class="auth-mark">${icon("bike", 26)}</div>
+  return `<div class="status-layout reveal">
+    <div class="status-card status-card--loading">
+      <div class="status-mark">${icon("bike", 26)}</div>
       <div class="skeleton skeleton--eyebrow"></div>
       <div class="skeleton skeleton--title"></div>
       <div class="skeleton skeleton--copy"></div>
       <div class="skeleton skeleton--button"></div>
-      <div class="loading-note"><span class="loading-pulse"></span>Connecting to the ride data source</div>
-    </div>
-  </div>`;
-}
-
-function loginView(): string {
-  return `<div class="auth-layout reveal">
-    <div class="auth-card">
-      <div class="auth-kicker"><span class="status-dot"></span>Google sign-in</div>
-      <div class="auth-mark">${icon("bike", 28)}</div>
-      <h1>Turn your rides into a <em>living</em> dashboard.</h1>
-      <p class="auth-copy">Sign in with any Google account. RideScope loads ride data from the site owner's private Sheet; your account is used only to verify your email.</p>
-      <div class="auth-features">
-        <span>${icon("check", 14)} Identity-only sign-in</span>
-        <span>${icon("check", 14)} No access to your Sheets</span>
-        <span>${icon("check", 14)} Server-side data access</span>
-      </div>
-      <button class="button button--primary button--wide" data-action="connect">${icon("database", 17)} Sign in with Google ${icon("arrow", 16)}</button>
-      <p class="auth-footnote">Successful sign-ins are logged with your verified email and UTC time in the site owner's Google Sheet. Anyone who signs in can view this dashboard's ride data.</p>
+      <div class="loading-note"><span class="loading-pulse"></span>Loading ride data</div>
     </div>
   </div>`;
 }
 
 function errorView(): string {
-  return `<div class="auth-layout reveal">
-    <div class="auth-card auth-card--error">
-      <div class="auth-mark auth-mark--error">!</div>
-      <div class="auth-kicker auth-kicker--error">Connection interrupted</div>
+  return `<div class="status-layout reveal">
+    <div class="status-card status-card--error">
+      <div class="status-mark status-mark--error">!</div>
+      <div class="status-kicker status-kicker--error">Connection interrupted</div>
       <h1>We could not load your rides.</h1>
-      <p class="auth-copy">${escapeHtml(state.error ?? "Unknown error")}</p>
+      <p class="status-copy">${escapeHtml(state.error ?? "Unknown error")}</p>
       <button class="button button--primary" data-action="retry">${icon("sync", 16)} Try again</button>
     </div>
   </div>`;
@@ -539,9 +516,9 @@ function errorView(): string {
 
 function noDataView(): string {
   return emptyPanel(
-    "Your ride log is ready for data",
-    "The Sheet connected successfully, but no valid ride rows were found. Check the date column and sync again.",
-    `<button class="button button--secondary" data-action="sync">${icon("sync", 15)} Sync Sheet</button>`
+    "No rides to show",
+    "Ride data is available, but no valid ride rows were found.",
+    `<button class="button button--secondary" data-action="retry">${icon("sync", 15)} Try again</button>`
   );
 }
 
@@ -571,15 +548,14 @@ function renderSidebar(): string {
       ${navGroup("Trends", ["performance", "day-of-week", "hour-of-day", "monthly-trends", "speed-elevation", "hr-zones", "progressive-metrics"])}
     </div>
     <div class="sidebar-footer">
-      <div class="source-mini"><span class="source-icon">${icon("database", 15)}</span><div><strong>Google Sheets</strong><span>private source of truth</span></div><span class="source-live"></span></div>
-      ${state.connected ? '<button class="sidebar-link" data-action="logout">Sign out of Google</button>' : ""}
+      <div class="source-mini"><span class="source-icon">${icon("database", 15)}</span><div><strong>Ride data</strong><span>live from Google Sheets</span></div><span class="source-live"></span></div>
     </div>
   </aside>`;
 }
 
 function renderQualityRail(): string {
   if (!state.dataset) {
-    return `<div class="rail-card rail-card--empty"><div class="rail-icon">${icon("database", 18)}</div><div class="eyebrow">Source</div><h3>Waiting for your Sheet</h3><p>Connect Google to unlock the dashboard and data-quality signals.</p></div>`;
+    return `<div class="rail-card rail-card--empty"><div class="rail-icon">${icon("database", 18)}</div><div class="eyebrow">Source</div><h3>Ride data</h3><p>Ride statistics will appear here when the Sheet is available.</p></div>`;
   }
   const quality = state.dataset.dataQuality;
   const total = Math.max(1, quality.totalRides);
@@ -631,7 +607,7 @@ function renderTopbar(): string {
       ${state.dataset ? `<button class="button button--sync ${state.syncing ? "is-syncing" : ""}" data-action="sync" ${state.syncing ? "disabled" : ""}>${icon("sync", 15)}<span>${state.syncing ? "Syncing" : "Sync"}</span></button>` : ""}
       <details class="palette-picker"><summary class="palette-trigger" aria-label="Choose color palette" title="Choose color palette"><span class="palette-trigger-swatches" aria-hidden="true"><i></i><i></i><i></i></span><span>Palette</span></summary><div class="palette-options" role="group" aria-label="Color palette">${PALETTES.map(palette => `<button class="palette-option ${state.palette === palette.id ? "is-selected" : ""}" data-action="set-palette" data-palette="${palette.id}" aria-pressed="${state.palette === palette.id}"><span class="palette-option-swatches" aria-hidden="true" style="--swatch-one:${palette.colors[0]};--swatch-two:${palette.colors[1]};--swatch-three:${palette.colors[2]}"><i></i><i></i><i></i></span><span>${palette.label}</span></button>`).join("")}</div></details>
       <button class="icon-button theme-toggle" data-action="toggle-theme" aria-label="Switch to ${nextTheme} theme" title="Switch to ${nextTheme} theme">${icon(nextTheme === "dark" ? "moon" : "sun", 17)}</button>
-      <div class="topbar-avatar" aria-label="Connected profile">RS</div>
+      <div class="topbar-avatar" aria-label="RideScope">RS</div>
     </div>
   </header>`;
 }
@@ -684,7 +660,6 @@ function shell(content: string): string {
 function renderContent(): string {
   if (state.loading) return loadingView();
   if (state.error) return errorView();
-  if (!state.connected) return loginView();
   if (!state.dataset || state.dataset.rides.length === 0) return noDataView();
   if (!state.year && state.dataset.years.length) state.year = state.dataset.years.at(-1)!;
 
@@ -1283,14 +1258,10 @@ function handleClick(event: MouseEvent): void {
   } else if (action === "close-menu") {
     state.menuOpen = false;
     mountShell();
-  } else if (action === "connect") {
-    connectGoogle();
   } else if (action === "retry") {
     void loadData();
   } else if (action === "sync") {
     void syncData();
-  } else if (action === "logout") {
-    void logoutGoogle().then(() => window.location.reload());
   } else if (action === "close-drawer") {
     state.selectedRide = null;
     mountShell();
@@ -1342,19 +1313,10 @@ async function loadData(): Promise<void> {
   state.error = null;
   mountShell();
   try {
-    const auth = await getAuthStatus();
-    state.connected = auth.connected;
-    if (!auth.connected) {
-      state.loading = false;
-      mountShell();
-      return;
-    }
     const result = await fetchDataset();
     applyDataset(result);
   } catch (error) {
-    state.error = error instanceof Error && error.message === "NOT_CONNECTED"
-      ? "Google access is not connected for this app."
-      : error instanceof Error ? error.message : "Unknown error";
+    state.error = error instanceof Error ? error.message : "Unknown error";
   } finally {
     state.loading = false;
     mountShell();
