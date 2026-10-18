@@ -38,6 +38,28 @@ ORDER BY ride_date DESC, id DESC
 LIMIT 20;
 ```
 
+## Samsung Health reader and export
+
+The Android prototype in **android/** reads cycling exercise sessions from Samsung Health and lets you preview them before saving an export. It does not connect to Neon or upload anything.
+
+- JSON includes ride summaries and ordered GPS points when Samsung Health has them and route access is granted.
+- CSV includes summaries only.
+- Samsung's available session duration, elapsed start-to-end time, distance, elevation, calories, speed, and heart-rate values are kept as separate fields. Moving time is exported as unavailable because this API does not provide it.
+- Declining route permission still allows ride summaries to be read and exported.
+- Source record IDs and deterministic fingerprints are included to support later de-duplication.
+
+### Build and use the Android prototype
+
+1. Install Android Studio with Android SDK Platform 35 and a Java 17 or newer JDK.
+2. Download the Samsung Health Data SDK from [Samsung Developer](https://developer.samsung.com/health/data/overview.html). Review and accept Samsung's SDK license yourself, then copy its API AAR file into **android/app/libs/**. That licensed binary is ignored by Git and must not be committed.
+3. Install Gradle 8.13, then run **gradle wrapper --gradle-version 8.13** from the **android/** directory to create the project wrapper. See the [Gradle wrapper guide](https://docs.gradle.org/current/userguide/gradle_wrapper.html).
+4. Open the **android/** directory in Android Studio and sync the Gradle project.
+5. Use a physical Android 10+ phone with Samsung Health 6.30.2 or newer installed and set up. Samsung Health Data SDK does not support Android emulators. In Samsung Health, open **Settings → About Samsung Health**, tap the version line quickly 10 times, then enable **Developer Mode (Samsung Health Data SDK) → Data Read**. See Samsung's [developer mode guide](https://developer.samsung.com/health/data/guide/developer-mode.html).
+6. Run the app on the phone. Choose a date range, tap **Fetch rides**, and grant exercise access. GPS access is requested separately and is optional.
+7. Review the ride list, then save JSON for routes or CSV for summaries using the file picker.
+
+The first build is for local testing. Samsung requires app verification before public distribution; see its [verification guide](https://developer.samsung.com/health/data/guide/app-verification.html). Check the exported data against known rides before any upload work is started. GPS tracks in JSON contain the recorded coordinates exactly.
+
 ## Dashboard features
 
 - Overview of ride distance, elevation, frequency, pace, recent activity, and personal records.
