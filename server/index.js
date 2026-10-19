@@ -297,12 +297,7 @@ app.get("/api/rides", async (_req, res) => {
         ride.bike
       ]))],
       rides: rides.map(ride => ({
-        databaseId: String(ride.database_id),
-        durationSeconds: ride.duration_seconds,
-        caloriesKcal: ride.calories_kcal,
-        sourceSystem: ride.source_system,
-        activityType: ride.activity_type,
-        title: ride.title
+        databaseId: String(ride.database_id)
       })),
       syncedAt: new Date().toISOString()
     });

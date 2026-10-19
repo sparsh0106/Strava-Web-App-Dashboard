@@ -1253,6 +1253,10 @@ function showToast(message: string, kind: ToastKind = "info"): void {
 
 function setPage(page: Page, updateHistory = true): void {
   if (!(page in PAGE_META)) return;
+  if (state.page === "ride-analysis" && page !== "ride-analysis") {
+    clearPrivateRideState();
+    void fetch("/api/route-access/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined);
+  }
   state.page = page;
   state.selectedRide = null;
   state.selectedDate = null;
@@ -1315,8 +1319,19 @@ async function loadPrivateRideAnalysis(): Promise<void> {
   mountShell();
   try {
     const response = await fetch(`/api/rides/${encodeURIComponent(ride.databaseId)}/analysis`, { credentials: "same-origin" });
-    const payload = await response.json() as { ok?: boolean; error?: string; routePoints?: RoutePoint[]; exerciseSamples?: ExerciseSample[] };
+    const payload = await response.json() as {
+      ok?: boolean;
+      error?: string;
+      routePoints?: RoutePoint[];
+      exerciseSamples?: ExerciseSample[];
+      ride?: { durationSeconds?: number | null; caloriesKcal?: number | null; sourceSystem?: string | null; activityType?: string | null; title?: string | null };
+    };
     if (!response.ok) throw new Error(payload.error || `Private ride request failed (${response.status}).`);
+    ride.durationSeconds = payload.ride?.durationSeconds ?? null;
+    ride.caloriesKcal = payload.ride?.caloriesKcal ?? null;
+    ride.sourceSystem = payload.ride?.sourceSystem ?? null;
+    ride.activityType = payload.ride?.activityType ?? null;
+    ride.title = payload.ride?.title ?? null;
     state.rideAnalysis = { routePoints: payload.routePoints ?? [], exerciseSamples: payload.exerciseSamples ?? [] };
     state.rideAnalysisError = null;
   } catch (error) {
@@ -1360,10 +1375,22 @@ async function unlockPrivateRideAnalysis(): Promise<void> {
 
 async function lockPrivateRideAnalysis(): Promise<void> {
   await fetch("/api/route-access/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined);
+  clearPrivateRideState();
+  mountShell();
+}
+
+function clearPrivateRideState(): void {
+  const ride = getSelectedRide();
+  if (ride) {
+    ride.durationSeconds = null;
+    ride.caloriesKcal = null;
+    ride.sourceSystem = null;
+    ride.activityType = null;
+    ride.title = null;
+  }
   state.rideAnalysis = null;
   state.rideAnalysisError = null;
   state.rideAnalysisLoading = false;
-  mountShell();
 }
 
 function openCalendarDate(date: string): void {
@@ -1553,7 +1580,12 @@ function handleKeydown(event: KeyboardEvent): void {
 }
 
 function handlePopState(): void {
-  state.page = pageFromHash();
+  const nextPage = pageFromHash();
+  if (state.page === "ride-analysis" && nextPage !== "ride-analysis") {
+    clearPrivateRideState();
+    void fetch("/api/route-access/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined);
+  }
+  state.page = nextPage;
   state.selectedRide = rideKeyFromHash();
   state.selectedDate = dateFromHash();
   mountShell();
