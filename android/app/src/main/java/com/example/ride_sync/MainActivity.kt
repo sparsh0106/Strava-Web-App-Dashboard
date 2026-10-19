@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        AutoSyncState.recoverTodayFromLegacyBaseline(this)
         if (AutoSyncState.isEnabled(this) && AutoSyncState.hasBaseline(this)) {
             AutoRideSyncScheduler.start(this)
         }
@@ -187,9 +188,10 @@ class MainActivity : ComponentActivity() {
                                                 today,
                                                 this@MainActivity
                                             )
+                                            AutoSyncState.recoverTodayFromLegacyBaseline(context)
                                             rides = AutoSyncState.unseenRides(context, recentRides)
                                             if (rides.isEmpty()) {
-                                                status = "No new rides found."
+                                                status = "Checked ${recentRides.size} recent rides · no new rides found."
                                             } else {
                                                 val result = withContext(Dispatchers.IO) {
                                                     SamsungRideSyncEngine.sync(syncToken.trim(), rides)

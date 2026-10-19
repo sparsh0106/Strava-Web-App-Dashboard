@@ -111,6 +111,8 @@ internal fun RideRecord.mergeDuplicate(other: RideRecord): RideRecord {
 
 internal data class SyncResult(val rides: Int, val routePoints: Int)
 
+internal class SyncHttpException(val statusCode: Int, message: String) : IOException(message)
+
 internal object SamsungRideSyncEngine {
     suspend fun readCyclingRides(
         context: Context,
@@ -238,7 +240,14 @@ internal object SamsungRideSyncEngine {
             val responseText = responseStream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
             if (statusCode !in 200..299) {
                 val detail = runCatching { JSONObject(responseText).optString("error") }.getOrNull().orEmpty()
-                throw IOException(detail.ifBlank { "RideScope rejected the upload (HTTP $statusCode)." })
+                val message = detail.ifBlank {
+                    if (statusCode == 404) {
+                        "RideScope's upload endpoint was not found (HTTP 404). Redeploy the latest server code."
+                    } else {
+                        "RideScope rejected the upload (HTTP $statusCode)."
+                    }
+                }
+                throw SyncHttpException(statusCode, message)
             }
             val response = JSONObject(responseText)
             if (!response.optBoolean("ok")) throw IOException("RideScope did not confirm the sync.")

@@ -26,6 +26,7 @@ internal object AutoSyncState {
     private const val PREFS = "ridescope_auto_sync"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_BASELINE_DONE = "baseline_done"
+    private const val KEY_TODAY_BASELINE_RECOVERY_DONE = "today_baseline_recovery_done"
     private const val KEY_KNOWN_RIDES = "known_rides"
     private const val KEY_STATUS = "last_status"
     private const val MAX_KNOWN_RIDES = 5000
@@ -64,8 +65,34 @@ internal object AutoSyncState {
     }
 
     fun establishBaseline(context: Context, rides: List<RideRecord>) {
-        writeKnownRides(context, rides.map(::identity))
+        // A baseline is meant to skip history. Keep today's workouts eligible so
+        // enabling sync after a ride cannot silently classify that ride as old.
+        val today = LocalDate.now()
+        writeKnownRides(
+            context,
+            rides.filter { it.startTime.atZone(java.time.ZoneId.systemDefault()).toLocalDate().isBefore(today) }
+                .map(::identity)
+        )
         preferences(context).edit().putBoolean(KEY_BASELINE_DONE, true).apply()
+    }
+
+    fun recoverTodayFromLegacyBaseline(context: Context) {
+        val prefs = preferences(context)
+        if (prefs.getBoolean(KEY_TODAY_BASELINE_RECOVERY_DONE, false)) return
+
+        // Earlier builds stored the baseline and successfully uploaded rides in
+        // one list. Remove today's entries once so rides skipped by that baseline
+        // get another chance. Server upserts make a retry of an already-uploaded
+        // ride safe and idempotent.
+        val today = LocalDate.now()
+        val retained = readKnownRides(context).filter {
+            java.time.Instant.ofEpochSecond(it.startEpochSecond)
+                .atZone(java.time.ZoneId.systemDefault())
+                .toLocalDate()
+                .isBefore(today)
+        }
+        writeKnownRides(context, retained)
+        prefs.edit().putBoolean(KEY_TODAY_BASELINE_RECOVERY_DONE, true).commit()
     }
 
     fun unseenRides(context: Context, rides: List<RideRecord>): List<RideRecord> {
@@ -175,6 +202,7 @@ class SamsungRideSyncWorker(context: Context, params: WorkerParameters) : Corout
             AutoSyncState.setStatus(applicationContext, "Open RideScope Sync to finish automatic sync setup.")
             return Result.success()
         }
+        AutoSyncState.recoverTodayFromLegacyBaseline(applicationContext)
 
         val token = SyncTokenVault.read(applicationContext)
         if (token.isBlank()) {
@@ -191,7 +219,10 @@ class SamsungRideSyncWorker(context: Context, params: WorkerParameters) : Corout
             )
             val newRides = AutoSyncState.unseenRides(applicationContext, rides)
             if (newRides.isEmpty()) {
-                AutoSyncState.setStatus(applicationContext, "Automatic sync is on · no new rides found.")
+                AutoSyncState.setStatus(
+                    applicationContext,
+                    "Automatic sync is on · checked ${rides.size} rides · no new rides found."
+                )
                 Result.success()
             } else {
                 val result = withContext(Dispatchers.IO) {
@@ -211,7 +242,11 @@ class SamsungRideSyncWorker(context: Context, params: WorkerParameters) : Corout
                 applicationContext,
                 error.message ?: "Automatic sync failed. It will try again."
             )
-            if (error is IOException) Result.retry() else Result.success()
+            when {
+                error is SyncHttpException && (error.statusCode == 408 || error.statusCode == 429 || error.statusCode >= 500) -> Result.retry()
+                error is IOException && error !is SyncHttpException -> Result.retry()
+                else -> Result.success()
+            }
         }
     }
 }
