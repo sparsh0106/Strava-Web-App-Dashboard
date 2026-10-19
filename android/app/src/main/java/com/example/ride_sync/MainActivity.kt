@@ -302,11 +302,44 @@ class MainActivity : ComponentActivity() {
             sessions.forEachIndexed { index, session ->
                 if (session.exerciseType in cyclingTypes) {
                     val ride = toRide(point.uid, index, session, canReadRoutes)
-                    unique[ride.sourceRecordId] = ride
+                    // Samsung can return the same exercise session through more than one
+                    // record. The record UID is therefore not a session identity; collapse
+                    // by the deterministic session fingerprint instead.
+                    unique[ride.fingerprint] = unique[ride.fingerprint]
+                        ?.mergeDuplicate(ride)
+                        ?: ride
                 }
             }
         }
         return unique.values.sortedByDescending { it.startTime }
+    }
+
+    private fun RideRecord.mergeDuplicate(other: RideRecord): RideRecord {
+        val preferred = listOf(this, other).maxWith(
+            compareBy<RideRecord> { it.routePoints.size }
+                .thenBy { listOf(it.title, it.comment, it.distanceMeters, it.elevationGainMeters,
+                    it.caloriesKcal, it.meanSpeedMetersPerSecond, it.maxSpeedMetersPerSecond,
+                    it.meanHeartRateBpm, it.maxHeartRateBpm).count { value -> value != null } }
+        )
+        val fallback = if (preferred === this) other else this
+        val mergedRoute = (routePoints + other.routePoints)
+            .distinctBy { Triple(it.timestamp, it.latitude, it.longitude) }
+            .sortedBy { it.timestamp }
+
+        return preferred.copy(
+            sourceRecordId = minOf(sourceRecordId, other.sourceRecordId),
+            title = preferred.title ?: fallback.title,
+            comment = preferred.comment ?: fallback.comment,
+            distanceMeters = preferred.distanceMeters ?: fallback.distanceMeters,
+            elevationGainMeters = preferred.elevationGainMeters ?: fallback.elevationGainMeters,
+            caloriesKcal = preferred.caloriesKcal ?: fallback.caloriesKcal,
+            meanSpeedMetersPerSecond = preferred.meanSpeedMetersPerSecond ?: fallback.meanSpeedMetersPerSecond,
+            maxSpeedMetersPerSecond = preferred.maxSpeedMetersPerSecond ?: fallback.maxSpeedMetersPerSecond,
+            meanHeartRateBpm = preferred.meanHeartRateBpm ?: fallback.meanHeartRateBpm,
+            maxHeartRateBpm = preferred.maxHeartRateBpm ?: fallback.maxHeartRateBpm,
+            bikeName = preferred.bikeName ?: fallback.bikeName,
+            routePoints = mergedRoute
+        )
     }
 
     private fun toRide(recordId: String, index: Int, session: ExerciseSession, includeRoute: Boolean): RideRecord {
