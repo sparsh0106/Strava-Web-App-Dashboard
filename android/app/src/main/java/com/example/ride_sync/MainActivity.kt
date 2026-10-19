@@ -296,22 +296,39 @@ class MainActivity : ComponentActivity() {
             DataType.ExerciseType.PredefinedExerciseType.MOUNTAIN_BIKING,
             DataType.ExerciseType.PredefinedExerciseType.STATIONARY_BIKING
         )
-        val unique = linkedMapOf<String, RideRecord>()
+        val unique = mutableListOf<RideRecord>()
         points.forEach { point ->
             val sessions = point.getValue(DataType.ExerciseType.SESSIONS).orEmpty()
             sessions.forEachIndexed { index, session ->
                 if (session.exerciseType in cyclingTypes) {
                     val ride = toRide(point.uid, index, session, canReadRoutes)
-                    // Samsung can return the same exercise session through more than one
-                    // record. The record UID is therefore not a session identity; collapse
-                    // by the deterministic session fingerprint instead.
-                    unique[ride.fingerprint] = unique[ride.fingerprint]
-                        ?.mergeDuplicate(ride)
-                        ?: ride
+                    // Samsung can return separate summary and route-bearing versions of
+                    // one workout. Duration/end time may differ, so the exact fingerprint
+                    // alone is too strict for deciding whether two results are duplicates.
+                    val duplicateIndex = unique.indexOfFirst { it.isSameSessionAs(ride) }
+                    if (duplicateIndex < 0) unique.add(ride)
+                    else unique[duplicateIndex] = unique[duplicateIndex].mergeDuplicate(ride)
                 }
             }
         }
-        return unique.values.sortedByDescending { it.startTime }
+        return unique.sortedByDescending { it.startTime }
+    }
+
+    private fun RideRecord.isSameSessionAs(other: RideRecord): Boolean {
+        if (activityType != other.activityType) return false
+        val startDifference = kotlin.math.abs(startTime.epochSecond - other.startTime.epochSecond)
+        if (startDifference > 120) return false
+
+        val thisDistance = distanceMeters
+        val otherDistance = other.distanceMeters
+        if (thisDistance != null && otherDistance != null) {
+            val toleranceMeters = maxOf(25.0, maxOf(thisDistance, otherDistance) * 0.001)
+            return kotlin.math.abs(thisDistance - otherDistance) <= toleranceMeters
+        }
+
+        // When distance is unavailable, only collapse records with an identical
+        // exact fingerprint; there is not enough evidence to safely merge them.
+        return fingerprint == other.fingerprint
     }
 
     private fun RideRecord.mergeDuplicate(other: RideRecord): RideRecord {
@@ -320,6 +337,7 @@ class MainActivity : ComponentActivity() {
                 .thenBy { listOf(it.title, it.comment, it.distanceMeters, it.elevationGainMeters,
                     it.caloriesKcal, it.meanSpeedMetersPerSecond, it.maxSpeedMetersPerSecond,
                     it.meanHeartRateBpm, it.maxHeartRateBpm).count { value -> value != null } }
+                .thenBy { it.fingerprint }
         )
         val fallback = if (preferred === this) other else this
         val mergedRoute = (routePoints + other.routePoints)
