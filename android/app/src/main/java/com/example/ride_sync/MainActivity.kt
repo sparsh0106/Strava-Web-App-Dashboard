@@ -1,6 +1,5 @@
 package com.example.ride_sync
 
-import android.app.DatePickerDialog
 import android.content.Context
 import android.os.Bundle
 import android.security.keystore.KeyGenParameterSpec
@@ -23,39 +22,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
-import com.samsung.android.sdk.health.data.HealthDataService
-import com.samsung.android.sdk.health.data.data.entries.ExerciseLocation
-import com.samsung.android.sdk.health.data.data.entries.ExerciseSession
 import com.samsung.android.sdk.health.data.error.ResolvablePlatformException
-import com.samsung.android.sdk.health.data.permission.AccessType
-import com.samsung.android.sdk.health.data.permission.Permission
-import com.samsung.android.sdk.health.data.request.DataType
-import com.samsung.android.sdk.health.data.request.DataTypes
-import com.samsung.android.sdk.health.data.request.LocalTimeFilter
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
-import java.security.MessageDigest
-import java.time.Duration
-import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -65,55 +47,34 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
-
-private const val SYNC_URL = "https://sparshrides.vercel.app/api/sync/samsung"
-private const val RIDES_PER_UPLOAD = 20
-private const val ROUTE_POINTS_PER_UPLOAD = 50_000
-private const val DEVICE_NAME = "Watch"
-private const val BIKE_NAME = "Fuji"
-
-private data class RoutePoint(
-    val timestamp: Instant,
-    val latitude: Double,
-    val longitude: Double,
-    val altitudeMeters: Double?
-)
-
-private data class RideRecord(
-    val sourceRecordId: String,
-    val fingerprint: String,
-    val activityType: String,
-    val title: String?,
-    val comment: String?,
-    val startTime: Instant,
-    val endTime: Instant,
-    val durationSeconds: Double,
-    val elapsedSeconds: Double,
-    val distanceMeters: Double?,
-    val elevationGainMeters: Double?,
-    val caloriesKcal: Double?,
-    val meanSpeedMetersPerSecond: Double?,
-    val maxSpeedMetersPerSecond: Double?,
-    val meanHeartRateBpm: Double?,
-    val maxHeartRateBpm: Double?,
-    val bikeName: String?,
-    val routePoints: List<RoutePoint>
-)
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        if (AutoSyncState.isEnabled(this) && AutoSyncState.hasBaseline(this)) {
+            AutoRideSyncScheduler.start(this)
+        }
+
         setContent {
             val context = LocalContext.current
-            val dateFormatter = remember { DateTimeFormatter.ofPattern("d MMM yyyy", Locale.getDefault()) }
-            var fromDate by remember { mutableStateOf(LocalDate.now().minusYears(5)) }
-            var toDate by remember { mutableStateOf(LocalDate.now()) }
+            val dateFormatter = remember {
+                DateTimeFormatter.ofPattern("EEE, d MMM yyyy · HH:mm", Locale.getDefault())
+            }
             var rides by remember { mutableStateOf<List<RideRecord>>(emptyList()) }
             var syncToken by remember { mutableStateOf(SyncTokenVault.read(context)) }
-            var status by remember { mutableStateOf("Choose a date range, then fetch your rides.") }
-            var fetching by remember { mutableStateOf(false) }
-            var syncing by remember { mutableStateOf(false) }
+            var autoSyncEnabled by remember { mutableStateOf(AutoSyncState.isEnabled(context)) }
+            var status by remember {
+                mutableStateOf(
+                    AutoSyncState.lastStatus(context).ifBlank {
+                        "Enable automatic sync to watch for new rides. Existing rides will be skipped."
+                    }
+                )
+            }
+            var working by remember { mutableStateOf(false) }
             var showToken by remember { mutableStateOf(false) }
 
             MaterialTheme {
@@ -126,74 +87,137 @@ class MainActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text("RideScope Sync", style = MaterialTheme.typography.headlineMedium)
-                        Text("Fetch cycling sessions from Samsung Health and sync them to your RideScope dashboard.")
+                        Text("New Samsung Health cycling rides sync to RideScope automatically.")
+
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text("PRIVATE UPLOAD", style = MaterialTheme.typography.labelLarge)
-                                Text("Your sync token is encrypted on this phone. Ride summaries and available GPS points are sent over HTTPS to RideScope when you tap Sync.")
+                                Text("BACKGROUND SYNC", style = MaterialTheme.typography.labelLarge)
+                                Text("When enabled, RideScope checks Samsung Health about every 15 minutes and uploads new rides only. Android may delay background checks to save battery.")
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(if (autoSyncEnabled) "Automatic sync is on" else "Automatic sync is off")
+                                    Switch(
+                                        checked = autoSyncEnabled,
+                                        enabled = !working,
+                                        onCheckedChange = { enabled ->
+                                            if (!enabled) {
+                                                AutoSyncState.setEnabled(context, false)
+                                                AutoRideSyncScheduler.stop(context)
+                                                autoSyncEnabled = false
+                                                status = "Automatic sync is off."
+                                                AutoSyncState.setStatus(context, status)
+                                            } else if (syncToken.isBlank()) {
+                                                status = "Enter the RideScope sync token before enabling automatic sync."
+                                            } else {
+                                                working = true
+                                                SyncTokenVault.save(context, syncToken.trim())
+                                                status = "Checking existing rides so only future additions sync…"
+                                                lifecycleScope.launch {
+                                                    try {
+                                                        if (!AutoSyncState.hasBaseline(context)) {
+                                                            val today = LocalDate.now()
+                                                            val existing = SamsungRideSyncEngine.readCyclingRides(
+                                                                context,
+                                                                today.minusDays(AUTO_SYNC_LOOKBACK_DAYS),
+                                                                today,
+                                                                this@MainActivity
+                                                            )
+                                                            AutoSyncState.establishBaseline(context, existing)
+                                                        }
+                                                        AutoSyncState.setEnabled(context, true)
+                                                        AutoRideSyncScheduler.start(context)
+                                                        autoSyncEnabled = true
+                                                        status = "Automatic sync is on. Existing rides were skipped; new rides will be checked about every 15 minutes."
+                                                        AutoSyncState.setStatus(context, status)
+                                                    } catch (error: Exception) {
+                                                        resolveSamsungError(error)
+                                                        status = error.message ?: "Could not enable automatic sync. Check Samsung Health access."
+                                                        AutoSyncState.setStatus(context, status)
+                                                    } finally {
+                                                        working = false
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
                             }
                         }
 
-                        Text("DATE RANGE", style = MaterialTheme.typography.labelLarge)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                            OutlinedButton(
-                                onClick = {
-                                    DatePickerDialog(
-                                        context,
-                                        { _, year, month, day -> fromDate = LocalDate.of(year, month + 1, day) },
-                                        fromDate.year,
-                                        fromDate.monthValue - 1,
-                                        fromDate.dayOfMonth
-                                    ).show()
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) { Text("From ${fromDate.format(dateFormatter)}") }
-                            OutlinedButton(
-                                onClick = {
-                                    DatePickerDialog(
-                                        context,
-                                        { _, year, month, day -> toDate = LocalDate.of(year, month + 1, day) },
-                                        toDate.year,
-                                        toDate.monthValue - 1,
-                                        toDate.dayOfMonth
-                                    ).show()
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) { Text("To ${toDate.format(dateFormatter)}") }
-                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text("SYNC CREDENTIAL", style = MaterialTheme.typography.labelLarge)
+                        OutlinedTextField(
+                            value = syncToken,
+                            onValueChange = {
+                                syncToken = it
+                                if (autoSyncEnabled) SyncTokenVault.save(context, it.trim())
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("RideScope sync token") },
+                            visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
+                            supportingText = { Text("Use the same SYNC_TOKEN configured in the RideScope Vercel project.") }
+                        )
+                        OutlinedButton(
+                            onClick = { showToken = !showToken },
+                            enabled = syncToken.isNotEmpty(),
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(if (showToken) "Hide token" else "Show token") }
 
                         Button(
                             onClick = {
-                                if (fromDate.isAfter(toDate)) {
-                                    status = "The start date must be on or before the end date."
+                                if (syncToken.isBlank()) {
+                                    status = "Enter the RideScope sync token first."
+                                } else if (!AutoSyncState.hasBaseline(context)) {
+                                    status = "Enable automatic sync once to mark existing rides as already known."
                                 } else {
-                                    fetching = true
+                                    working = true
                                     rides = emptyList()
-                                    status = "Connecting to Samsung Health…"
+                                    SyncTokenVault.save(context, syncToken.trim())
+                                    status = "Checking Samsung Health for new rides…"
                                     lifecycleScope.launch {
                                         try {
-                                            rides = readCyclingRides(fromDate, toDate)
-                                            val pointCount = rides.sumOf { it.routePoints.size }
-                                            status = if (rides.isEmpty()) {
-                                                "No cycling sessions found for this date range."
+                                            val today = LocalDate.now()
+                                            val recentRides = SamsungRideSyncEngine.readCyclingRides(
+                                                context,
+                                                today.minusDays(AUTO_SYNC_LOOKBACK_DAYS),
+                                                today,
+                                                this@MainActivity
+                                            )
+                                            rides = AutoSyncState.unseenRides(context, recentRides)
+                                            if (rides.isEmpty()) {
+                                                status = "No new rides found."
                                             } else {
-                                                "${rides.size} rides fetched · $pointCount GPS points available"
+                                                val result = withContext(Dispatchers.IO) {
+                                                    SamsungRideSyncEngine.sync(syncToken.trim(), rides)
+                                                }
+                                                AutoSyncState.markSynced(context, rides)
+                                                status = "${result.rides} new rides synced · ${result.routePoints} GPS points saved to Neon."
                                             }
+                                            AutoSyncState.setStatus(context, status)
                                         } catch (error: Exception) {
-                                            if (error is ResolvablePlatformException && error.hasResolution) {
-                                                runCatching { error.resolve(this@MainActivity) }
-                                            }
-                                            status = error.message ?: "Could not read Samsung Health data. Check Samsung Health setup and permissions."
-                                            rides = emptyList()
+                                            resolveSamsungError(error)
+                                            status = error.message ?: "Could not check Samsung Health. Try again."
+                                            AutoSyncState.setStatus(context, status)
                                         } finally {
-                                            fetching = false
+                                            working = false
                                         }
                                     }
                                 }
                             },
-                            enabled = !fetching && !syncing,
+                            enabled = !working,
                             modifier = Modifier.fillMaxWidth()
-                        ) { Text(if (fetching) "Fetching rides…" else "Fetch rides") }
+                        ) { Text(if (working) "Checking rides…" else "Check for new rides now") }
+
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("PRIVATE UPLOAD", style = MaterialTheme.typography.labelLarge)
+                                Text("Your sync token is encrypted on this phone. Only rides not seen before are uploaded over HTTPS. New rides include summaries and any available GPS points.")
+                            }
+                        }
 
                         Text(status, style = MaterialTheme.typography.titleMedium)
 
@@ -201,311 +225,25 @@ class MainActivity : ComponentActivity() {
                             Card(modifier = Modifier.fillMaxWidth()) {
                                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text(ride.title ?: readableType(ride.activityType), style = MaterialTheme.typography.titleMedium)
-                                    Text("${ride.startTime.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("EEE, d MMM yyyy · HH:mm", Locale.getDefault()))} · ${formatDuration(ride.durationSeconds)}")
-                                    val distance = ride.distanceMeters?.let { String.format(Locale.getDefault(), "%.2f km", it / 1000.0) } ?: "Distance unavailable"
+                                    Text("${ride.startTime.atZone(ZoneId.systemDefault()).format(dateFormatter)} · ${formatDuration(ride.durationSeconds)}")
+                                    val distance = ride.distanceMeters?.let {
+                                        String.format(Locale.getDefault(), "%.2f km", it / 1000.0)
+                                    } ?: "Distance unavailable"
                                     val route = if (ride.routePoints.isEmpty()) "No GPS route" else "${ride.routePoints.size} GPS points"
                                     Text("$distance · $route")
                                 }
                             }
                         }
-
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("SYNC CREDENTIAL", style = MaterialTheme.typography.labelLarge)
-                        OutlinedTextField(
-                            value = syncToken,
-                            onValueChange = { syncToken = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            label = { Text("RideScope sync token") },
-                            visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
-                            supportingText = { Text("Set SYNC_TOKEN in the RideScope Vercel project, then paste the same value here.") }
-                        )
-                        OutlinedButton(
-                            onClick = { showToken = !showToken },
-                            enabled = syncToken.isNotEmpty(),
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text(if (showToken) "Hide token" else "Show token") }
-                        Button(
-                            onClick = {
-                                if (syncToken.isBlank()) {
-                                    status = "Enter the sync token configured for RideScope first."
-                                } else if (rides.isEmpty()) {
-                                    status = "Fetch rides before syncing."
-                                } else {
-                                    SyncTokenVault.save(context, syncToken.trim())
-                                    syncing = true
-                                    lifecycleScope.launch {
-                                        try {
-                                            val batches = uploadBatches(rides)
-                                            var syncedRides = 0
-                                            var syncedPoints = 0
-                                            batches.forEachIndexed { index, batch ->
-                                                status = "Syncing batch ${index + 1} of ${batches.size}…"
-                                                val result = withContext(Dispatchers.IO) {
-                                                    uploadBatch(syncToken.trim(), batch)
-                                                }
-                                                syncedRides += result.first
-                                                syncedPoints += result.second
-                                            }
-                                            status = "$syncedRides rides synced · $syncedPoints GPS points stored in Neon"
-                                        } catch (error: Exception) {
-                                            status = error.message ?: "Sync failed. Retry; completed batches are safe to send again."
-                                        } finally {
-                                            syncing = false
-                                        }
-                                    }
-                                }
-                            },
-                            enabled = !fetching && !syncing && rides.isNotEmpty(),
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text(if (syncing) "Syncing…" else "Sync ${rides.size} rides to RideScope") }
                     }
                 }
             }
         }
     }
 
-    private suspend fun readCyclingRides(fromDate: LocalDate, toDate: LocalDate): List<RideRecord> {
-        val store = HealthDataService.getStore(applicationContext)
-        val exercisePermission = Permission.of(DataTypes.EXERCISE, AccessType.READ)
-        val exercisePermissions = setOf(exercisePermission)
-        var granted = store.getGrantedPermissions(exercisePermissions)
-        if (!granted.containsAll(exercisePermissions)) {
-            granted = store.requestPermissions(exercisePermissions, this@MainActivity)
+    private fun resolveSamsungError(error: Exception) {
+        if (error is ResolvablePlatformException && error.hasResolution) {
+            runCatching { error.resolve(this@MainActivity) }
         }
-        if (!granted.contains(exercisePermission)) throw IllegalStateException("Exercise read permission was not granted.")
-
-        val locationPermission = Permission.of(DataTypes.EXERCISE_LOCATION, AccessType.READ)
-        val locationPermissions = setOf(locationPermission)
-        val canReadRoutes = try {
-            var locations = store.getGrantedPermissions(locationPermissions)
-            if (!locations.containsAll(locationPermissions)) {
-                locations = store.requestPermissions(locationPermissions, this@MainActivity)
-            }
-            locations.contains(locationPermission)
-        } catch (_: Exception) {
-            false
-        }
-
-        val request = DataTypes.EXERCISE.readDataRequestBuilder
-            .setLocalTimeFilter(LocalTimeFilter.of(fromDate.atStartOfDay(), toDate.plusDays(1).atStartOfDay()))
-            .setOrdering(com.samsung.android.sdk.health.data.request.Ordering.DESC)
-            .setLimit(1000)
-            .build()
-        val points = store.readData(request).dataList
-        val cyclingTypes = setOf(
-            DataType.ExerciseType.PredefinedExerciseType.BIKING,
-            DataType.ExerciseType.PredefinedExerciseType.MOUNTAIN_BIKING,
-            DataType.ExerciseType.PredefinedExerciseType.STATIONARY_BIKING
-        )
-        val unique = mutableListOf<RideRecord>()
-        points.forEach { point ->
-            val sessions = point.getValue(DataType.ExerciseType.SESSIONS).orEmpty()
-            sessions.forEachIndexed { index, session ->
-                if (session.exerciseType in cyclingTypes) {
-                    val ride = toRide(point.uid, index, session, canReadRoutes)
-                    // Samsung can return separate summary and route-bearing versions of
-                    // one workout. Duration/end time may differ, so the exact fingerprint
-                    // alone is too strict for deciding whether two results are duplicates.
-                    val duplicateIndex = unique.indexOfFirst { it.isSameSessionAs(ride) }
-                    if (duplicateIndex < 0) unique.add(ride)
-                    else unique[duplicateIndex] = unique[duplicateIndex].mergeDuplicate(ride)
-                }
-            }
-        }
-        return unique.sortedByDescending { it.startTime }
-    }
-
-    private fun RideRecord.isSameSessionAs(other: RideRecord): Boolean {
-        if (activityType != other.activityType) return false
-        val startDifference = kotlin.math.abs(startTime.epochSecond - other.startTime.epochSecond)
-        if (startDifference > 120) return false
-
-        val thisDistance = distanceMeters
-        val otherDistance = other.distanceMeters
-        if (thisDistance != null && otherDistance != null) {
-            val toleranceMeters = maxOf(25.0, maxOf(thisDistance, otherDistance) * 0.001)
-            return kotlin.math.abs(thisDistance - otherDistance) <= toleranceMeters
-        }
-
-        // When distance is unavailable, only collapse records with an identical
-        // exact fingerprint; there is not enough evidence to safely merge them.
-        return fingerprint == other.fingerprint
-    }
-
-    private fun RideRecord.mergeDuplicate(other: RideRecord): RideRecord {
-        val preferred = listOf(this, other).maxWith(
-            compareBy<RideRecord> { it.routePoints.size }
-                .thenBy { listOf(it.title, it.comment, it.distanceMeters, it.elevationGainMeters,
-                    it.caloriesKcal, it.meanSpeedMetersPerSecond, it.maxSpeedMetersPerSecond,
-                    it.meanHeartRateBpm, it.maxHeartRateBpm).count { value -> value != null } }
-                .thenBy { it.fingerprint }
-        )
-        val fallback = if (preferred === this) other else this
-        val mergedRoute = (routePoints + other.routePoints)
-            .distinctBy { Triple(it.timestamp, it.latitude, it.longitude) }
-            .sortedBy { it.timestamp }
-
-        return preferred.copy(
-            sourceRecordId = minOf(sourceRecordId, other.sourceRecordId),
-            title = preferred.title ?: fallback.title,
-            comment = preferred.comment ?: fallback.comment,
-            distanceMeters = preferred.distanceMeters ?: fallback.distanceMeters,
-            elevationGainMeters = preferred.elevationGainMeters ?: fallback.elevationGainMeters,
-            caloriesKcal = preferred.caloriesKcal ?: fallback.caloriesKcal,
-            meanSpeedMetersPerSecond = preferred.meanSpeedMetersPerSecond ?: fallback.meanSpeedMetersPerSecond,
-            maxSpeedMetersPerSecond = preferred.maxSpeedMetersPerSecond ?: fallback.maxSpeedMetersPerSecond,
-            meanHeartRateBpm = preferred.meanHeartRateBpm ?: fallback.meanHeartRateBpm,
-            maxHeartRateBpm = preferred.maxHeartRateBpm ?: fallback.maxHeartRateBpm,
-            bikeName = preferred.bikeName ?: fallback.bikeName,
-            routePoints = mergedRoute
-        )
-    }
-
-    private fun toRide(recordId: String, index: Int, session: ExerciseSession, includeRoute: Boolean): RideRecord {
-        val routePoints = if (includeRoute) {
-            session.route.orEmpty().sortedBy { it.timestamp }.mapNotNull { it.toRoutePointOrNull() }
-        } else emptyList()
-        val duration = session.duration.toMillis().coerceAtLeast(0).toDouble() / 1000.0
-        val elapsed = Duration.between(session.startTime, session.endTime).toMillis().coerceAtLeast(0).toDouble() / 1000.0
-        val activityType = session.exerciseType.toString()
-        val fingerprintInput = listOf(
-            activityType,
-            session.startTime.toString(),
-            session.endTime.toString(),
-            finiteDouble(session.distance)?.toString().orEmpty(),
-            session.duration.toMillis().toString()
-        ).joinToString("|")
-        return RideRecord(
-            sourceRecordId = "$recordId/session/$index",
-            fingerprint = sha256(fingerprintInput),
-            activityType = activityType,
-            title = session.customTitle?.takeIf { it.isNotBlank() },
-            comment = session.comment?.takeIf { it.isNotBlank() },
-            startTime = session.startTime,
-            endTime = session.endTime,
-            durationSeconds = duration,
-            elapsedSeconds = elapsed,
-            distanceMeters = finiteDouble(session.distance),
-            elevationGainMeters = finiteDouble(session.altitudeGain),
-            caloriesKcal = finiteDouble(session.calories),
-            meanSpeedMetersPerSecond = finiteDouble(session.meanSpeed),
-            maxSpeedMetersPerSecond = finiteDouble(session.maxSpeed),
-            meanHeartRateBpm = finiteDouble(session.meanHeartRate),
-            maxHeartRateBpm = finiteDouble(session.maxHeartRate),
-            bikeName = BIKE_NAME,
-            routePoints = routePoints
-        )
-    }
-
-    private fun ExerciseLocation.toRoutePointOrNull(): RoutePoint? {
-        if (!latitude.isFinite() || !longitude.isFinite()) return null
-        return RoutePoint(timestamp, latitude.toDouble(), longitude.toDouble(), finiteDouble(altitude))
-    }
-
-    private fun uploadBatch(token: String, rides: List<RideRecord>): Pair<Int, Int> {
-        val connection = (URL(SYNC_URL).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 20_000
-            readTimeout = 90_000
-            doOutput = true
-            setRequestProperty("Authorization", "Bearer $token")
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            val payload = syncPayload(rides).toByteArray(StandardCharsets.UTF_8)
-            connection.setFixedLengthStreamingMode(payload.size)
-            connection.outputStream.use { it.write(payload) }
-            val statusCode = connection.responseCode
-            val responseStream = if (statusCode in 200..299) connection.inputStream else connection.errorStream
-            val responseText = responseStream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (statusCode !in 200..299) {
-                val detail = runCatching { JSONObject(responseText).optString("error") }.getOrNull().orEmpty()
-                throw IOException(detail.ifBlank { "RideScope rejected the upload (HTTP $statusCode)." })
-            }
-            val response = JSONObject(responseText)
-            if (!response.optBoolean("ok")) throw IOException("RideScope did not confirm the sync.")
-            return response.optInt("ridesSynced") to response.optInt("routePointsSynced")
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun uploadBatches(records: List<RideRecord>): List<List<RideRecord>> {
-        val batches = mutableListOf<List<RideRecord>>()
-        var current = mutableListOf<RideRecord>()
-        var currentPointCount = 0
-        records.forEach { ride ->
-            if (ride.routePoints.size > ROUTE_POINTS_PER_UPLOAD) {
-                throw IllegalStateException("A ride has too many GPS points to upload in one request.")
-            }
-            if (current.isNotEmpty() &&
-                (current.size >= RIDES_PER_UPLOAD || currentPointCount + ride.routePoints.size > ROUTE_POINTS_PER_UPLOAD)
-            ) {
-                batches.add(current)
-                current = mutableListOf()
-                currentPointCount = 0
-            }
-            current.add(ride)
-            currentPointCount += ride.routePoints.size
-        }
-        if (current.isNotEmpty()) batches.add(current)
-        return batches
-    }
-
-    private fun syncPayload(records: List<RideRecord>): String = JSONObject().apply {
-        put("schemaVersion", 1)
-        put("source", "Samsung Health")
-        put("timezone", ZoneId.systemDefault().id)
-        put("exportedAt", Instant.now().toString())
-        put("rides", JSONArray().apply {
-            records.forEach { ride ->
-                put(JSONObject().apply {
-                    put("sourceRecordId", ride.sourceRecordId)
-                    put("fingerprint", ride.fingerprint)
-                    put("activityType", ride.activityType)
-                    putNullable(this, "title", ride.title)
-                    putNullable(this, "comment", ride.comment)
-                    put("startTime", ride.startTime.toString())
-                    put("endTime", ride.endTime.toString())
-                    put("durationSeconds", ride.durationSeconds)
-                    put("elapsedSeconds", ride.elapsedSeconds)
-                    put("movingTimeSeconds", ride.durationSeconds)
-                    put("deviceName", DEVICE_NAME)
-                    putNullable(this, "distanceMeters", ride.distanceMeters)
-                    putNullable(this, "elevationGainMeters", ride.elevationGainMeters)
-                    putNullable(this, "caloriesKcal", ride.caloriesKcal)
-                    putNullable(this, "meanSpeedMetersPerSecond", ride.meanSpeedMetersPerSecond)
-                    putNullable(this, "maxSpeedMetersPerSecond", ride.maxSpeedMetersPerSecond)
-                    putNullable(this, "meanHeartRateBpm", ride.meanHeartRateBpm)
-                    putNullable(this, "maxHeartRateBpm", ride.maxHeartRateBpm)
-                    putNullable(this, "bikeName", ride.bikeName)
-                    put("routePoints", JSONArray().apply {
-                        ride.routePoints.forEachIndexed { index, point ->
-                            put(JSONObject().apply {
-                                put("sequence", index)
-                                put("timestamp", point.timestamp.toString())
-                                put("latitude", point.latitude)
-                                put("longitude", point.longitude)
-                                putNullable(this, "altitudeMeters", point.altitudeMeters)
-                            })
-                        }
-                    })
-                })
-            }
-        })
-    }.toString()
-
-    private fun finiteDouble(value: Float?): Double? = value?.takeIf { it.isFinite() }?.toDouble()
-
-    private fun putNullable(json: JSONObject, key: String, value: Any?) {
-        json.put(key, value ?: JSONObject.NULL)
-    }
-
-    private fun sha256(value: String): String {
-        val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(StandardCharsets.UTF_8))
-        return bytes.joinToString("") { "%02x".format(it) }
     }
 
     private fun formatDuration(seconds: Double): String {
@@ -520,7 +258,7 @@ class MainActivity : ComponentActivity() {
         .replaceFirstChar { it.titlecase(Locale.getDefault()) }
 }
 
-private object SyncTokenVault {
+internal object SyncTokenVault {
     private const val PREFS = "ridescope_sync_credentials"
     private const val PREF_TOKEN = "encrypted_sync_token"
     private const val KEY_ALIAS = "ridescope_sync_token_v1"

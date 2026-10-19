@@ -40,7 +40,7 @@ LIMIT 20;
 
 ## Samsung Health sync
 
-The Android app in **android/** reads Samsung Health cycling sessions, previews them, and uploads selected date ranges to the server-side API. The API writes summaries to `rides` and ordered GPS samples to `ride_route_points` in Neon. Existing Strava rows remain intact. Samsung source IDs make uploads idempotent: retrying a batch updates the same ride rather than adding a duplicate. If route permission is declined, summaries still sync; a later sync with route access fills in the route.
+The Android app in **android/** reads Samsung Health cycling sessions and uploads new rides to the server-side API. The API writes summaries to `rides` and ordered GPS samples to `ride_route_points` in Neon. Existing Strava rows remain intact. Samsung source IDs make uploads idempotent: retrying a batch updates the same ride rather than adding a duplicate. If route permission is declined, summaries still sync; a later sync with route access fills in the route. When automatic sync is first enabled, the app marks rides already present in the last 30 days as known and skips uploading them.
 
 Samsung provides a session duration plus start and end timestamps, but no separate moving-time field. RideScope uses the start/end difference for `Elapsed_Time` and Samsung's session duration for `Moving_Time`. Synced Samsung sessions are labeled `Device = Watch` and `Bike = Fuji`; distance is stored in kilometres, elevation in metres, and speeds in kilometres per hour. Heart-rate fields use Samsung's mean and maximum values. Missing Samsung metrics remain unavailable. Recorded GPS points are stored exactly in Neon. The dashboard currently displays the ride summaries; route points are not exposed by a public route endpoint yet.
 
@@ -51,8 +51,9 @@ Samsung provides a session duration plus start and end timestamps, but no separa
 3. In the Vercel project, add `SYNC_TOKEN` to the Production environment. Use a long random value and keep it private. The server also needs its existing `DATABASE_URL` Neon integration.
 4. Run `npm run db:migrate-samsung` once against the same Neon database configured for Vercel, with `DATABASE_URL` set in `.env.local`. It adds source metadata and the route-points table without deleting existing rides. If you prefer Neon SQL Editor, run [`db/schema.sql`](db/schema.sql) there.
 5. Re-deploy after setting the Vercel environment variable. The Android app uses `https://sparshrides.vercel.app/api/sync/samsung`.
-6. Run the app, choose the date range, tap **Fetch rides**, and grant Samsung exercise access. Grant route access if you want GPS tracks.
-7. Paste the same `SYNC_TOKEN` into the app and tap **Sync**. It is encrypted at rest with Android Keystore. The app uploads batches of 20, and interrupted batches can be retried safely.
+6. Run the app and grant Samsung exercise access; grant route access if you want GPS tracks.
+7. Paste the same `SYNC_TOKEN` into the app and enable **Automatic sync**. The token is encrypted at rest with Android Keystore. The first enable marks rides already present in the last 30 days as known; only new rides are uploaded after that.
+8. WorkManager checks for new rides about every 15 minutes while the app is closed, and Android may delay checks for battery saving. Android's periodic work minimum is 15 minutes, so reliable five-minute background polling isn't supported by the standard scheduler. **Check for new rides now** runs an immediate check.
 
 Samsung requires app verification before public distribution; see its [verification guide](https://developer.samsung.com/health/data/guide/app-verification.html). Local testing on your own phone can use Samsung Health developer mode.
 
