@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "concurrently -k \"vite\" \"node server/index.js\"",
     "db:import": "node scripts/import-csv.js",
+    "db:migrate-samsung": "node scripts/migrate-samsung.js",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && vite build",
     "check": "npm run typecheck && vite build",

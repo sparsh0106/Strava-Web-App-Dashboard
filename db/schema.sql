@@ -11,7 +11,37 @@ CREATE TABLE IF NOT EXISTS rides (
   device text,
   hr_max numeric(8, 2),
   hr_mean numeric(8, 2),
-  bike text
+  bike text,
+  source_system text NOT NULL DEFAULT 'manual',
+  source_record_id text,
+  source_fingerprint text,
+  activity_type text,
+  title text,
+  comment text,
+  duration_seconds numeric(12, 3),
+  calories_kcal numeric(12, 3)
 );
 
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_system text NOT NULL DEFAULT 'manual';
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_record_id text;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_fingerprint text;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS activity_type text;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS title text;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS comment text;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS duration_seconds numeric(12, 3);
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS calories_kcal numeric(12, 3);
+
 CREATE INDEX IF NOT EXISTS rides_ride_date_idx ON rides (ride_date);
+CREATE UNIQUE INDEX IF NOT EXISTS rides_source_record_idx
+  ON rides (source_system, source_record_id)
+  WHERE source_record_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS ride_route_points (
+  ride_id bigint NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+  sequence integer NOT NULL CHECK (sequence >= 0),
+  recorded_at timestamptz NOT NULL,
+  latitude double precision NOT NULL CHECK (latitude BETWEEN -90 AND 90),
+  longitude double precision NOT NULL CHECK (longitude BETWEEN -180 AND 180),
+  altitude_meters numeric(10, 3),
+  PRIMARY KEY (ride_id, sequence)
+);

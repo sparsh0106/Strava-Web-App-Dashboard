@@ -38,27 +38,23 @@ ORDER BY ride_date DESC, id DESC
 LIMIT 20;
 ```
 
-## Samsung Health reader and export
+## Samsung Health sync
 
-The Android prototype in **android/** reads cycling exercise sessions from Samsung Health and lets you preview them before saving an export. It does not connect to Neon or upload anything.
+The Android app in **android/** reads Samsung Health cycling sessions, previews them, and uploads selected date ranges to the server-side API. The API writes summaries to `rides` and ordered GPS samples to `ride_route_points` in Neon. Existing Strava rows remain intact. Samsung source IDs make uploads idempotent: retrying a batch updates the same ride rather than adding a duplicate. If route permission is declined, summaries still sync; a later sync with route access fills in the route.
 
-- JSON includes ride summaries and ordered GPS points when Samsung Health has them and route access is granted.
-- CSV includes summaries only.
-- Samsung's available session duration, elapsed start-to-end time, distance, elevation, calories, speed, and heart-rate values are kept as separate fields. Moving time is exported as unavailable because this API does not provide it.
-- Declining route permission still allows ride summaries to be read and exported.
-- Source record IDs and deterministic fingerprints are included to support later de-duplication.
+Samsung supplies moving time as unavailable, so it remains blank. The app does not infer missing metrics. Recorded GPS points are stored exactly in Neon. The dashboard currently displays the ride summaries; route points are not exposed by a public route endpoint yet.
 
-### Build and use the Android prototype
+### Configure and run the Android app
 
-1. Install Android Studio with Android SDK Platform 35 and a Java 17 or newer JDK.
-2. Download the Samsung Health Data SDK from [Samsung Developer](https://developer.samsung.com/health/data/overview.html). Review and accept Samsung's SDK license yourself, then copy its API AAR file into **android/app/libs/**. That licensed binary is ignored by Git and must not be committed.
-3. Install Gradle 8.13, then run **gradle wrapper --gradle-version 8.13** from the **android/** directory to create the project wrapper. See the [Gradle wrapper guide](https://docs.gradle.org/current/userguide/gradle_wrapper.html).
-4. Open the **android/** directory in Android Studio and sync the Gradle project.
-5. Use a physical Android 10+ phone with Samsung Health 6.30.2 or newer installed and set up. Samsung Health Data SDK does not support Android emulators. In Samsung Health, open **Settings → About Samsung Health**, tap the version line quickly 10 times, then enable **Developer Mode (Samsung Health Data SDK) → Data Read**. See Samsung's [developer mode guide](https://developer.samsung.com/health/data/guide/developer-mode.html).
-6. Run the app on the phone. Choose a date range, tap **Fetch rides**, and grant exercise access. GPS access is requested separately and is optional.
-7. Review the ride list, then save JSON for routes or CSV for summaries using the file picker.
+1. Open **android/** in Android Studio and sync Gradle. The project uses the Samsung Health Data SDK AAR at **android/app/libs/**; the licensed AAR is ignored by Git. If the local copy is missing, download the SDK from [Samsung Developer](https://developer.samsung.com/health/data/overview.html), accept its terms, and copy the API AAR into that folder.
+2. Use a physical Android 10+ Samsung phone with Samsung Health 6.30.2 or later. Samsung Health Data SDK does not support emulators. Enable **Developer Mode (Samsung Health Data SDK) → Data Read** in Samsung Health; see Samsung's [developer mode guide](https://developer.samsung.com/health/data/guide/developer-mode.html).
+3. In the Vercel project, add `SYNC_TOKEN` to the Production environment. Use a long random value and keep it private. The server also needs its existing `DATABASE_URL` Neon integration.
+4. Run `npm run db:migrate-samsung` once against the same Neon database configured for Vercel, with `DATABASE_URL` set in `.env.local`. It adds source metadata and the route-points table without deleting existing rides. If you prefer Neon SQL Editor, run [`db/schema.sql`](db/schema.sql) there.
+5. Re-deploy after setting the Vercel environment variable. The Android app uses `https://sparshrides.vercel.app/api/sync/samsung`.
+6. Run the app, choose the date range, tap **Fetch rides**, and grant Samsung exercise access. Grant route access if you want GPS tracks.
+7. Paste the same `SYNC_TOKEN` into the app and tap **Sync**. It is encrypted at rest with Android Keystore. The app uploads batches of 20, and interrupted batches can be retried safely.
 
-The first build is for local testing. Samsung requires app verification before public distribution; see its [verification guide](https://developer.samsung.com/health/data/guide/app-verification.html). Check the exported data against known rides before any upload work is started. GPS tracks in JSON contain the recorded coordinates exactly.
+Samsung requires app verification before public distribution; see its [verification guide](https://developer.samsung.com/health/data/guide/app-verification.html). Local testing on your own phone can use Samsung Health developer mode.
 
 ## Dashboard features
 
@@ -79,7 +75,7 @@ To connect a new deployment:
 
 1. Add Neon to the Vercel project from the Vercel Marketplace and choose the required environments (Production, and Preview if desired).
 2. Confirm the project has a `DATABASE_URL` environment variable. Keep it server-side; do not add it to frontend code or a `VITE_` variable.
-3. Create the `rides` table using [`db/schema.sql`](db/schema.sql), or run the CSV importer below, which creates the table if needed.
+3. Create the `rides` table using [`db/schema.sql`](db/schema.sql), or run the CSV importer below, which creates the table if needed. Run `npm run db:migrate-samsung` to add Samsung sync columns and route storage.
 4. Deploy the app and open `/api/health`. A working connection returns `databaseReady: true` and a `rideCount`.
 
 The existing production app is at [sparshrides.vercel.app](https://sparshrides.vercel.app). Useful live checks:
@@ -152,6 +148,7 @@ PostgreSQL generates the `id`. `ride_date` is required; `start_time` and metric 
 | --- | --- |
 | `GET /api/rides` | Returns the rows used by the dashboard. Public and read-only. Responses use `Cache-Control: no-store`. |
 | `GET /api/health` | Reports whether the database is configured and reachable, and how many rides are present. It does not return credentials. |
+| `POST /api/sync/samsung` | Upserts Samsung ride summaries and route points. Requires `Authorization: Bearer <SYNC_TOKEN>`; route data is stored in `ride_route_points`. |
 
 ## Project structure
 
