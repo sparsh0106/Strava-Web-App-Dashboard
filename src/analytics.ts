@@ -133,7 +133,16 @@ function localDateFromISO(value: string): Date {
   return new Date(year, month - 1, day);
 }
 
-export function normalizeRows(rows: string[][]): Ride[] {
+export type RideMetadata = {
+  databaseId?: string | number | null;
+  durationSeconds?: number | string | null;
+  caloriesKcal?: number | string | null;
+  sourceSystem?: string | null;
+  activityType?: string | null;
+  title?: string | null;
+};
+
+export function normalizeRows(rows: string[][], metadata: RideMetadata[] = []): Ride[] {
   const data = rows.slice(1).map((row, index) => {
     const parsed = parseDateParts(row[0]);
     if (!parsed) return null;
@@ -145,6 +154,13 @@ export function normalizeRows(rows: string[][]): Ride[] {
 
     return {
       id: `${normalizedDate}-${index + 1}`,
+      databaseId: metadata[index]?.databaseId === null || metadata[index]?.databaseId === undefined
+        ? null : String(metadata[index].databaseId),
+      durationSeconds: num(metadata[index]?.durationSeconds),
+      caloriesKcal: num(metadata[index]?.caloriesKcal),
+      sourceSystem: metadata[index]?.sourceSystem ?? null,
+      activityType: metadata[index]?.activityType ?? null,
+      title: metadata[index]?.title ?? null,
       date: normalizedDate,
       startTime: parsed.time,
       elapsedTime: String(row[1] ?? ""),

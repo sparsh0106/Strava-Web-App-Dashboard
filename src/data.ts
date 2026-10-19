@@ -1,4 +1,4 @@
-import { buildDataset, normalizeRows } from "./analytics";
+import { buildDataset, normalizeRows, type RideMetadata } from "./analytics";
 import type { Dataset } from "./types";
 
 export type DatasetResult = {
@@ -12,9 +12,9 @@ export async function fetchDataset(): Promise<DatasetResult> {
     const body = await res.text();
     throw new Error(body || `Data request failed: ${res.status}`);
   }
-  const payload: { values: string[][]; syncedAt?: string } = await res.json();
+  const payload: { values: string[][]; rides?: RideMetadata[]; syncedAt?: string } = await res.json();
   return {
-    dataset: buildDataset(normalizeRows(payload.values ?? [])),
+    dataset: buildDataset(normalizeRows(payload.values ?? [], payload.rides ?? [])),
     syncedAt: payload.syncedAt ?? null
   };
 }

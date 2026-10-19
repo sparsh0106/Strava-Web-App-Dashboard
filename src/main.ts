@@ -28,6 +28,7 @@ type Page =
   | "overview"
   | "calendar"
   | "ride-detail"
+  | "ride-analysis"
   | "performance"
   | "bikes"
   | "streaks"
@@ -61,6 +62,16 @@ type GoalValues = {
   elevationM: number;
 };
 
+type RoutePoint = { timestamp: string; latitude: number; longitude: number; altitudeMeters: number | null };
+type ExerciseSample = {
+  timestamp: string;
+  heartRateBpm: number | null;
+  cadenceRpm: number | null;
+  powerWatts: number | null;
+  speedMetersPerSecond: number | null;
+};
+type RideAnalysisData = { routePoints: RoutePoint[]; exerciseSamples: ExerciseSample[] };
+
 type AppState = {
   dataset: Dataset | null;
   page: Page;
@@ -77,6 +88,9 @@ type AppState = {
   ridePage: number;
   selectedRide: string | null;
   selectedDate: string | null;
+  rideAnalysis: RideAnalysisData | null;
+  rideAnalysisLoading: boolean;
+  rideAnalysisError: string | null;
   favorites: Set<string>;
   goals: GoalValues;
   theme: Theme;
@@ -114,6 +128,13 @@ const PAGE_META: Record<Page, PageMeta> = {
     description: "A complete look at the activities recorded on this date.",
     icon: "rides",
     group: "command"
+  },
+  "ride-analysis": {
+    label: "Ride analysis",
+    title: "Ride analysis",
+    description: "A private, ride by ride view of your recorded data.",
+    icon: "rides",
+    group: "explore"
   },
   performance: {
     label: "Distance analytics",
@@ -218,6 +239,7 @@ const ICON_PATHS: Record<string, string> = {
   chevron: '<path d="m9 18 6-6-6-6"/>',
   spark: '<path d="m12 2 1.7 6.3L20 10l-6.3 1.7L12 18l-1.7-6.3L4 10l6.3-1.7L12 2Z"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   moon: '<path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/>',
@@ -284,8 +306,16 @@ function applyTheme(theme: Theme, palette: Palette): void {
 }
 
 function pageFromHash(): Page {
-  const value = window.location.hash.replace(/^#/, "").split("?")[0] as Page;
+  const raw = window.location.hash.replace(/^#/, "").split("?")[0];
+  if (raw.startsWith("ride/")) return "ride-analysis";
+  const value = raw as Page;
   return value in PAGE_META ? value : "overview";
+}
+
+function rideKeyFromHash(): string | null {
+  const raw = window.location.hash.replace(/^#/, "").split("?")[0];
+  if (!raw.startsWith("ride/")) return null;
+  try { return decodeURIComponent(raw.slice("ride/".length)) || null; } catch { return null; }
 }
 
 function dateFromHash(): string | null {
@@ -310,6 +340,9 @@ const state: AppState = {
   ridePage: 0,
   selectedRide: null,
   selectedDate: dateFromHash(),
+  rideAnalysis: null,
+  rideAnalysisLoading: false,
+  rideAnalysisError: null,
   favorites: readFavorites(),
   goals: readStoredGoals(),
   theme: readTheme(),
@@ -408,7 +441,7 @@ function getSelectedYear(): number {
 
 function getSelectedRide(): Ride | null {
   if (!state.selectedRide || !state.dataset) return null;
-  return state.dataset.rides.find(ride => ride.id === state.selectedRide) ?? null;
+  return state.dataset.rides.find(ride => ride.id === state.selectedRide || ride.databaseId === state.selectedRide) ?? null;
 }
 
 function isFavorite(ride: Ride): boolean {
@@ -603,7 +636,7 @@ function renderTopbar(): string {
     <button class="icon-button mobile-menu" data-action="menu" aria-label="Open navigation">${icon("menu", 20)}</button>
     <div class="topbar-title"><div class="breadcrumb"><span>Workspace</span>${icon("chevron", 12)}<span>${escapeHtml(meta.label)}</span></div><h1>${escapeHtml(meta.title)}</h1></div>
     <div class="topbar-actions">
-      ${state.dataset && state.dataset.years.length ? `<div class="scope-toggle" role="group" aria-label="Data scope"><button class="${state.scope === "year" ? "is-active" : ""}" data-scope="year">Year</button><button class="${state.scope === "all" ? "is-active" : ""}" data-scope="all">All time</button></div>${scopeYearOptions()}` : ""}
+      ${state.page !== "ride-analysis" && state.dataset && state.dataset.years.length ? `<div class="scope-toggle" role="group" aria-label="Data scope"><button class="${state.scope === "year" ? "is-active" : ""}" data-scope="year">Year</button><button class="${state.scope === "all" ? "is-active" : ""}" data-scope="all">All time</button></div>${scopeYearOptions()}` : ""}
       ${state.dataset ? `<button class="button button--sync ${state.syncing ? "is-syncing" : ""}" data-action="sync" ${state.syncing ? "disabled" : ""}>${icon("sync", 15)}<span>${state.syncing ? "Syncing" : "Sync"}</span></button>` : ""}
       <details class="palette-picker"><summary class="palette-trigger" aria-label="Choose color palette" title="Choose color palette"><span class="palette-trigger-swatches" aria-hidden="true"><i></i><i></i><i></i></span><span>Palette</span></summary><div class="palette-options" role="group" aria-label="Color palette">${PALETTES.map(palette => `<button class="palette-option ${state.palette === palette.id ? "is-selected" : ""}" data-action="set-palette" data-palette="${palette.id}" aria-pressed="${state.palette === palette.id}"><span class="palette-option-swatches" aria-hidden="true" style="--swatch-one:${palette.colors[0]};--swatch-two:${palette.colors[1]};--swatch-three:${palette.colors[2]}"><i></i><i></i><i></i></span><span>${palette.label}</span></button>`).join("")}</div></details>
       <button class="icon-button theme-toggle" data-action="toggle-theme" aria-label="Switch to ${nextTheme} theme" title="Switch to ${nextTheme} theme">${icon(nextTheme === "dark" ? "moon" : "sun", 17)}</button>
@@ -613,7 +646,7 @@ function renderTopbar(): string {
 }
 
 function renderMobileScopeControls(): string {
-  if (!state.dataset || !state.dataset.years.length) return "";
+  if (state.page === "ride-analysis" || !state.dataset || !state.dataset.years.length) return "";
   return `<div class="mobile-data-controls"><span class="mobile-data-label">Data scope</span><div class="scope-toggle" role="group" aria-label="Data scope"><button class="${state.scope === "year" ? "is-active" : ""}" data-scope="year">Year</button><button class="${state.scope === "all" ? "is-active" : ""}" data-scope="all">All time</button></div>${scopeYearOptions()}</div>`;
 }
 
@@ -652,7 +685,6 @@ function shell(content: string): string {
       <section class="content" id="content">${content}</section>
     </main>
     ${renderRail()}
-    ${renderDrawer()}
     ${renderToast()}
   </div>`;
 }
@@ -667,6 +699,7 @@ function renderContent(): string {
     case "overview": return overviewView();
     case "calendar": return calendarView();
     case "ride-detail": return rideDetailView();
+    case "ride-analysis": return rideAnalysisView();
     case "performance": return performanceView();
     case "bikes": return bikesView();
     case "streaks": return streaksView();
@@ -870,6 +903,100 @@ function rideDetailView(): string {
     ${pageHeader(`${fmt.n(rides.length)} ride${rides.length === 1 ? "" : "s"} · ${fmt.hours(totalHours)}`, fmt.date(date), "Every activity and recorded metric for this date.", `<button class="button button--secondary" data-page-target="calendar">${icon("arrow", 15)} Back to calendar</button>`)}
     <section class="kpi-grid kpi-grid--three reveal reveal--delay-1">${kpiCard("Distance", fmt.km(totalDistance), "combined for this day", "overview", "cyan")}${kpiCard("Elevation", fmt.m(totalElevation), "combined climbing", "elevation", "violet")}${kpiCard("Moving time", fmt.hours(totalHours), `${fmt.n(rides.length)} activities`, "clock", "orange")}</section>
     <section class="ride-detail-list reveal reveal--delay-2">${rides.map((ride, index) => `<article class="panel ride-detail-card"><div class="ride-detail-heading"><span class="ride-detail-index">${String(index + 1).padStart(2, "0")}</span><div><div class="eyebrow">${escapeHtml(ride.startTime ?? "Ride")}</div><h2>${escapeHtml(ride.bike)}</h2></div><button class="icon-button icon-button--star ${isFavorite(ride) ? "is-starred" : ""}" data-favorite="${ride.id}" aria-label="Toggle favorite">${icon("star", 16)}</button></div><div class="ride-detail-metrics"><div><span>Distance</span><strong>${fmt.km(ride.distance)}</strong></div><div><span>Moving time</span><strong>${rideDurationHours(ride) === null ? "—" : fmt.hours(rideDurationHours(ride))}</strong></div><div><span>Elapsed time</span><strong>${escapeHtml(ride.elapsedTime || "—")}</strong></div><div><span>Elevation gain</span><strong>${fmt.m(ride.elevation)}</strong></div><div><span>Average speed</span><strong>${fmt.speed(ride.avgSpeed)}</strong></div><div><span>Maximum speed</span><strong>${fmt.speed(ride.maxSpeed)}</strong></div><div><span>Average heart rate</span><strong>${ride.hrMean === null ? "—" : `${ride.hrMean.toFixed(0)} bpm`}</strong></div><div><span>Maximum heart rate</span><strong>${ride.hrMax === null ? "—" : `${ride.hrMax.toFixed(0)} bpm`}</strong></div><div><span>Device</span><strong>${escapeHtml(ride.device ?? "Not recorded")}</strong></div></div></article>`).join("")}</section>
+  </div>`;
+}
+
+function analysisStat(label: string, value: string, note = ""): string {
+  return `<div class="analysis-stat"><span>${escapeHtml(label)}</span><strong>${value}</strong>${note ? `<small>${escapeHtml(note)}</small>` : ""}</div>`;
+}
+
+function renderRouteMap(points: RoutePoint[]): string {
+  if (points.length < 2) return `<div class="analysis-empty">${points.length ? "One GPS point was recorded; a route needs at least two." : "No GPS route was recorded for this ride."}</div>`;
+  const meanLatitude = points.reduce((sum, point) => sum + point.latitude, 0) / points.length;
+  const cosLatitude = Math.cos(meanLatitude * Math.PI / 180);
+  const projected = points.map(point => ({ x: point.longitude * cosLatitude, y: point.latitude }));
+  const minX = Math.min(...projected.map(point => point.x));
+  const maxX = Math.max(...projected.map(point => point.x));
+  const minY = Math.min(...projected.map(point => point.y));
+  const maxY = Math.max(...projected.map(point => point.y));
+  const width = Math.max(maxX - minX, 0.00001);
+  const height = Math.max(maxY - minY, 0.00001);
+  const pad = 18;
+  const scale = Math.min((600 - pad * 2) / width, (320 - pad * 2) / height);
+  const drawnWidth = width * scale;
+  const drawnHeight = height * scale;
+  const offsetX = (600 - drawnWidth) / 2;
+  const offsetY = (320 - drawnHeight) / 2;
+  const coordinates = projected.map(point => `${(offsetX + (point.x - minX) * scale).toFixed(1)},${(320 - offsetY - (point.y - minY) * scale).toFixed(1)}`).join(" ");
+  const [startX, startY] = coordinates.split(" ")[0].split(",");
+  const [endX, endY] = coordinates.split(" ").at(-1)!.split(",");
+  return `<div class="route-map-wrap"><svg class="route-map" viewBox="0 0 600 320" role="img" aria-label="Recorded GPS route with start and finish markers"><defs><linearGradient id="route-stroke" x1="0" x2="1"><stop offset="0" stop-color="var(--accent-start)"/><stop offset="1" stop-color="var(--accent-end)"/></linearGradient></defs><polyline class="route-halo" points="${coordinates}"/><polyline class="route-line" points="${coordinates}"/><circle class="route-marker route-marker--start" cx="${startX}" cy="${startY}" r="7"/><circle class="route-marker route-marker--finish" cx="${endX}" cy="${endY}" r="7"/></svg><div class="route-legend"><span><i class="route-dot route-dot--start"></i>Start</span><span><i class="route-dot route-dot--finish"></i>Finish</span><small>${fmt.n(points.length)} recorded points</small></div></div>`;
+}
+
+function renderActualSeries(samples: ExerciseSample[], key: "heartRateBpm" | "speedMetersPerSecond" | "cadenceRpm" | "powerWatts", label: string, unit: string, color: string, sessionStart: number): string {
+  const multiplier = key === "speedMetersPerSecond" ? 3.6 : 1;
+  const entries = samples.map(sample => ({ time: Date.parse(sample.timestamp), rawValue: sample[key] }))
+    .filter((entry): entry is { time: number; rawValue: number } => Number.isFinite(entry.time) && typeof entry.rawValue === "number" && Number.isFinite(entry.rawValue))
+    .map(entry => ({ time: entry.time, value: entry.rawValue * multiplier }));
+  if (entries.length < 2) return "";
+  const minTime = Number.isFinite(sessionStart) ? sessionStart : entries[0].time;
+  const duration = Math.max(entries.at(-1)!.time - minTime, 1);
+  const values = entries.map(entry => entry.value);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const valueSpan = Math.max(maxValue - minValue, 1);
+  const coordinates = entries.map((entry, index) => {
+    const x = 46 + ((entry.time - minTime) / duration) * 700;
+    const y = maxValue === minValue ? 109 : 174 - ((entry.value - minValue) / valueSpan) * 130;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const lastMinute = Math.round((entries.at(-1)!.time - minTime) / 60000);
+  return `<article class="analysis-chart-card"><div class="analysis-chart-title"><div><span class="eyebrow">Recorded samples</span><h3>${escapeHtml(label)}</h3></div><strong>${fmt.n(minValue, 0)}–${fmt.n(maxValue, 0)} ${escapeHtml(unit)}</strong></div><svg class="analysis-chart" viewBox="0 0 780 220" role="img" aria-label="${escapeHtml(`${label} across elapsed time`)}"><line x1="46" y1="44" x2="46" y2="176"/><line x1="46" y1="176" x2="746" y2="176"/><polyline points="${coordinates}" style="--series-color:${color}"/><text x="46" y="204">0 min</text><text x="746" y="204" text-anchor="end">${lastMinute} min</text></svg><div class="analysis-chart-caption">${fmt.n(entries.length)} samples · ${Math.round(duration / 1000).toLocaleString()} seconds elapsed</div></article>`;
+}
+
+function renderElevationProfile(points: RoutePoint[], sessionStart: number): string {
+  const entries = points.map(point => ({ time: Date.parse(point.timestamp), value: point.altitudeMeters }))
+    .filter((entry): entry is { time: number; value: number } => Number.isFinite(entry.time) && typeof entry.value === "number" && Number.isFinite(entry.value));
+  if (entries.length < 2) return "";
+  const min = Math.min(...entries.map(entry => entry.value));
+  const max = Math.max(...entries.map(entry => entry.value));
+  const span = Math.max(max - min, 1);
+  const first = Number.isFinite(sessionStart) ? sessionStart : entries[0].time;
+  const duration = Math.max(entries.at(-1)!.time - first, 1);
+  const line = entries.map(entry => `${46 + ((entry.time - first) / duration) * 700},${max === min ? 109 : 174 - ((entry.value - min) / span) * 130}`).join(" ");
+  return `<article class="analysis-chart-card"><div class="analysis-chart-title"><div><span class="eyebrow">GPS altitude</span><h3>Elevation profile</h3></div><strong>${fmt.n(min, 0)}–${fmt.n(max, 0)} m</strong></div><svg class="analysis-chart" viewBox="0 0 780 220" role="img" aria-label="Recorded GPS altitude over elapsed time"><line x1="46" y1="44" x2="46" y2="176"/><line x1="46" y1="176" x2="746" y2="176"/><polyline points="${line}" style="--series-color:var(--accent-mid)"/><text x="46" y="204">Start</text><text x="746" y="204" text-anchor="end">Finish</text></svg><div class="analysis-chart-caption">${fmt.n(entries.length)} GPS altitude readings · no values interpolated</div></article>`;
+}
+
+function rideAnalysisView(): string {
+  const ride = getSelectedRide();
+  if (!ride) return emptyPanel("Ride not found", "Return to the ride explorer and open a ride from the current database.", `<button class="button button--secondary" data-page-target="rides">Back to ride explorer</button>`);
+  const analysis = state.rideAnalysis;
+  const samples = analysis?.exerciseSamples ?? [];
+  const routePoints = analysis?.routePoints ?? [];
+  const sessionStart = Date.parse(`${ride.date}T${ride.startTime ?? "00:00:00"}`);
+  const durationText = ride.durationSeconds === null ? "—" : fmt.hours(ride.durationSeconds / 3600);
+  const gate = state.rideAnalysisLoading
+    ? `<div class="analysis-lock"><span class="analysis-lock-icon">${icon("sync", 22)}</span><h2>Loading private ride data…</h2><p>Checking your access and retrieving recorded route and workout samples.</p></div>`
+    : analysis
+      ? ""
+      : `<form class="analysis-lock" onsubmit="return false"><span class="analysis-lock-icon">${icon("lock", 22)}</span><div class="eyebrow">Private ride data</div><h2>Unlock this ride analysis</h2><p>Precise GPS coordinates and workout samples stay private. Enter your RideScope private-view password to load them.</p>${state.rideAnalysisError ? `<div class="analysis-error" role="alert">${escapeHtml(state.rideAnalysisError)}</div>` : ""}<label class="analysis-password"><span>Private-view password</span><input type="password" autocomplete="current-password" data-input="route-password" aria-label="Private-view password"/></label><button class="button button--primary" data-action="unlock-analysis">Unlock private analysis</button></form>`;
+  const seriesCharts = [
+    renderActualSeries(samples, "heartRateBpm", "Heart rate", "bpm", "#e24c48", sessionStart),
+    renderActualSeries(samples, "speedMetersPerSecond", "Speed", "km/h", "#317ba0", sessionStart),
+    renderActualSeries(samples, "cadenceRpm", "Cadence", "rpm", "#7c58b1", sessionStart),
+    renderActualSeries(samples, "powerWatts", "Power", "W", "#dd8c2d", sessionStart),
+    renderElevationProfile(routePoints, sessionStart)
+  ].filter(Boolean).join("");
+  const hasSensorCharts = ["heartRateBpm", "speedMetersPerSecond", "cadenceRpm", "powerWatts"].some(key => samples.some(sample => {
+    const value = sample[key as keyof ExerciseSample];
+    return typeof value === "number" && Number.isFinite(value);
+  }));
+  const charts = `${seriesCharts}${hasSensorCharts ? "" : `<article class="analysis-chart-card analysis-empty-chart"><div class="eyebrow">Sensor time series</div><h3>No recorded sensor samples</h3><p>This ride has no detailed heart-rate, speed, cadence, or power samples. Summary metrics are shown only where Samsung Health provided them.</p></article>`}`;
+  return `<div class="page-stack ride-analysis-page">
+    ${pageHeader(`${fmt.date(ride.date)}${ride.startTime ? ` · ${ride.startTime}` : ""}`, ride.title || `${ride.bike} ride`, "Individual workout analysis from the values and sensor samples actually recorded.", `<button class="button button--secondary" data-action="back-to-rides">${icon("arrow", 15)} Ride explorer</button>`)}
+    <section class="analysis-summary panel reveal reveal--delay-1"><div class="analysis-summary-head"><div><div class="eyebrow">Ride summary</div><h2>${escapeHtml(ride.bike)}</h2><p>${escapeHtml(ride.device ?? "Recording device not available")}${ride.activityType ? ` · ${escapeHtml(ride.activityType.replaceAll("_", " "))}` : ""}</p></div><button class="icon-button icon-button--star ${isFavorite(ride) ? "is-starred" : ""}" data-favorite="${ride.id}" aria-label="Toggle favorite">${icon("star", 17)}</button></div><div class="analysis-stats">${analysisStat("Distance", fmt.km(ride.distance))}${analysisStat("Elapsed time", escapeHtml(ride.elapsedTime || "—"))}${analysisStat("Source duration", durationText)}${analysisStat("Moving time", escapeHtml(ride.movingTime || "—"))}${analysisStat("Average speed", fmt.speed(ride.avgSpeed))}${analysisStat("Max speed", fmt.speed(ride.maxSpeed))}${analysisStat("Average heart rate", ride.hrMean === null ? "—" : `${fmt.n(ride.hrMean)} bpm`)}${analysisStat("Max heart rate", ride.hrMax === null ? "—" : `${fmt.n(ride.hrMax)} bpm`)}${analysisStat("Elevation gain", fmt.m(ride.elevation))}${analysisStat("Calories", ride.caloriesKcal === null ? "—" : `${fmt.n(ride.caloriesKcal)} kcal`)}${analysisStat("Bike", escapeHtml(ride.bike))}${analysisStat("Device", escapeHtml(ride.device ?? "Not recorded"))}</div></section>
+    ${gate}
+    ${analysis ? `<section class="analysis-private-content reveal reveal--delay-1"><div class="analysis-private-heading"><div><div class="eyebrow">Private session detail</div><h2>Route & recorded effort</h2><p>Exact route points are fetched only after your password unlocks this view. No third-party map tiles are used.</p></div><button class="button button--secondary" data-action="lock-analysis">Lock private data</button></div><div class="analysis-detail-grid"><article class="panel analysis-route-card"><div class="analysis-panel-heading"><div><div class="eyebrow">Recorded GPS route</div><h3>${fmt.n(routePoints.length)} route points</h3></div></div>${renderRouteMap(routePoints)}</article><div class="analysis-chart-list">${charts}</div></div></section>` : ""}
   </div>`;
 }
 
@@ -1160,7 +1287,82 @@ function toggleFavorite(id: string): void {
 }
 
 function openRide(date: string): void {
-  state.selectedRide = date;
+  const ride = state.dataset?.rides.find(item => item.id === date);
+  if (!ride) return;
+  const routeKey = ride.databaseId ?? ride.id;
+  state.selectedRide = routeKey;
+  state.selectedDate = null;
+  state.page = "ride-analysis";
+  state.rideAnalysis = null;
+  state.rideAnalysisError = null;
+  state.rideAnalysisLoading = false;
+  state.menuOpen = false;
+  history.pushState({ page: "ride-analysis", rideId: routeKey }, "", `#ride/${encodeURIComponent(routeKey)}`);
+  renderWithTransition();
+  void loadPrivateRideAnalysis();
+}
+
+async function loadPrivateRideAnalysis(): Promise<void> {
+  const ride = getSelectedRide();
+  if (!ride || !ride.databaseId || state.page !== "ride-analysis") {
+    state.rideAnalysisError = ride ? "Private route analysis is available for rides stored in the connected Neon database." : null;
+    state.rideAnalysisLoading = false;
+    mountShell();
+    return;
+  }
+  state.rideAnalysisLoading = true;
+  state.rideAnalysisError = null;
+  mountShell();
+  try {
+    const response = await fetch(`/api/rides/${encodeURIComponent(ride.databaseId)}/analysis`, { credentials: "same-origin" });
+    const payload = await response.json() as { ok?: boolean; error?: string; routePoints?: RoutePoint[]; exerciseSamples?: ExerciseSample[] };
+    if (!response.ok) throw new Error(payload.error || `Private ride request failed (${response.status}).`);
+    state.rideAnalysis = { routePoints: payload.routePoints ?? [], exerciseSamples: payload.exerciseSamples ?? [] };
+    state.rideAnalysisError = null;
+  } catch (error) {
+    state.rideAnalysis = null;
+    state.rideAnalysisError = error instanceof Error && !error.message.toLowerCase().includes("unlock")
+      ? error.message : null;
+  } finally {
+    state.rideAnalysisLoading = false;
+    mountShell();
+  }
+}
+
+async function unlockPrivateRideAnalysis(): Promise<void> {
+  const passwordInput = document.querySelector<HTMLInputElement>("[data-input='route-password']");
+  const password = passwordInput?.value ?? "";
+  if (!password) {
+    state.rideAnalysisError = "Enter your private-view password to continue.";
+    mountShell();
+    return;
+  }
+  if (passwordInput) passwordInput.value = "";
+  state.rideAnalysisLoading = true;
+  state.rideAnalysisError = null;
+  mountShell();
+  try {
+    const response = await fetch("/api/route-access", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password })
+    });
+    const payload = await response.json() as { error?: string };
+    if (!response.ok) throw new Error(payload.error || `Could not unlock private ride data (${response.status}).`);
+    await loadPrivateRideAnalysis();
+  } catch (error) {
+    state.rideAnalysisLoading = false;
+    state.rideAnalysisError = error instanceof Error ? error.message : "Could not unlock private ride data.";
+    mountShell();
+  }
+}
+
+async function lockPrivateRideAnalysis(): Promise<void> {
+  await fetch("/api/route-access/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined);
+  state.rideAnalysis = null;
+  state.rideAnalysisError = null;
+  state.rideAnalysisLoading = false;
   mountShell();
 }
 
@@ -1293,6 +1495,14 @@ function handleClick(event: MouseEvent): void {
     void loadData();
   } else if (action === "sync") {
     void syncData();
+  } else if (action === "unlock-analysis") {
+    void unlockPrivateRideAnalysis();
+  } else if (action === "lock-analysis") {
+    void lockPrivateRideAnalysis();
+  } else if (action === "back-to-rides") {
+    state.rideAnalysis = null;
+    state.rideAnalysisError = null;
+    setPage("rides");
   } else if (action === "close-drawer") {
     state.selectedRide = null;
     mountShell();
@@ -1313,7 +1523,11 @@ function handleClick(event: MouseEvent): void {
 function handleKeydown(event: KeyboardEvent): void {
   const target = event.target as HTMLElement;
   if (event.key === "Escape") {
-    if (state.selectedRide || state.menuOpen) {
+    if (state.page === "ride-analysis") {
+      state.rideAnalysis = null;
+      state.rideAnalysisError = null;
+      setPage("rides");
+    } else if (state.selectedRide || state.menuOpen) {
       state.selectedRide = null;
       state.menuOpen = false;
       mountShell();
@@ -1340,9 +1554,10 @@ function handleKeydown(event: KeyboardEvent): void {
 
 function handlePopState(): void {
   state.page = pageFromHash();
-  state.selectedRide = null;
+  state.selectedRide = rideKeyFromHash();
   state.selectedDate = dateFromHash();
   mountShell();
+  if (state.page === "ride-analysis") void loadPrivateRideAnalysis();
 }
 
 async function loadData(): Promise<void> {
@@ -1352,6 +1567,8 @@ async function loadData(): Promise<void> {
   try {
     const result = await fetchDataset();
     applyDataset(result);
+    state.selectedRide = rideKeyFromHash();
+    if (state.page === "ride-analysis") void loadPrivateRideAnalysis();
   } catch (error) {
     state.error = error instanceof Error ? error.message : "Unknown error";
   } finally {
@@ -1414,6 +1631,10 @@ function applyDataset(result: DatasetResult): void {
   state.year = state.year && result.dataset.years.includes(state.year) ? state.year : result.dataset.years.at(-1) ?? null;
   if (state.bikeFilter !== "all" && !result.dataset.bikes.some(bike => bike.bike === state.bikeFilter)) state.bikeFilter = "all";
   state.ridePage = 0;
+  if (state.page === "ride-analysis" && state.selectedRide) {
+    const current = state.dataset.rides.find(ride => ride.databaseId === state.selectedRide || ride.id === state.selectedRide);
+    if (!current) state.selectedRide = null;
+  }
 }
 
 

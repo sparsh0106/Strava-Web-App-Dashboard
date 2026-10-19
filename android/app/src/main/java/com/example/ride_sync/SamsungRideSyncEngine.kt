@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.activity.ComponentActivity
 import com.samsung.android.sdk.health.data.HealthDataService
 import com.samsung.android.sdk.health.data.data.entries.ExerciseLocation
+import com.samsung.android.sdk.health.data.data.entries.ExerciseLog
 import com.samsung.android.sdk.health.data.data.entries.ExerciseSession
 import com.samsung.android.sdk.health.data.permission.AccessType
 import com.samsung.android.sdk.health.data.permission.Permission
@@ -24,7 +25,7 @@ import java.time.ZoneId
 
 private const val SYNC_URL = "https://sparshrides.vercel.app/api/sync/samsung"
 private const val RIDES_PER_UPLOAD = 20
-private const val ROUTE_POINTS_PER_UPLOAD = 50_000
+private const val SAMPLES_PER_UPLOAD = 8_000
 private const val DEVICE_NAME = "Watch"
 private const val BIKE_NAME = "Fuji"
 
@@ -32,7 +33,17 @@ internal data class RoutePoint(
     val timestamp: Instant,
     val latitude: Double,
     val longitude: Double,
-    val altitudeMeters: Double?
+    val altitudeMeters: Double?,
+    val sequence: Int
+)
+
+internal data class ExerciseSample(
+    val timestamp: Instant,
+    val heartRateBpm: Double?,
+    val cadenceRpm: Double?,
+    val powerWatts: Double?,
+    val speedMetersPerSecond: Double?,
+    val sequence: Int
 )
 
 internal data class RideRecord(
@@ -53,7 +64,10 @@ internal data class RideRecord(
     val meanHeartRateBpm: Double?,
     val maxHeartRateBpm: Double?,
     val bikeName: String?,
-    val routePoints: List<RoutePoint>
+    val routePoints: List<RoutePoint>,
+    val exerciseSamples: List<ExerciseSample>,
+    val replaceRoutePoints: Boolean = true,
+    val replaceExerciseSamples: Boolean = true
 )
 
 internal fun RideRecord.isSameSessionAs(other: RideRecord): Boolean {
@@ -72,7 +86,7 @@ internal fun RideRecord.isSameSessionAs(other: RideRecord): Boolean {
 
 internal fun RideRecord.mergeDuplicate(other: RideRecord): RideRecord {
     val preferred = listOf(this, other).maxWith(
-        compareBy<RideRecord> { it.routePoints.size }
+        compareBy<RideRecord> { it.routePoints.size + it.exerciseSamples.size }
             .thenBy {
                 listOf(
                     it.title,
@@ -92,6 +106,11 @@ internal fun RideRecord.mergeDuplicate(other: RideRecord): RideRecord {
     val mergedRoute = (routePoints + other.routePoints)
         .distinctBy { Triple(it.timestamp, it.latitude, it.longitude) }
         .sortedBy { it.timestamp }
+        .mapIndexed { index, point -> point.copy(sequence = index) }
+    val mergedSamples = (exerciseSamples + other.exerciseSamples)
+        .distinctBy { Triple(it.timestamp, it.heartRateBpm, it.speedMetersPerSecond) }
+        .sortedBy { it.timestamp }
+        .mapIndexed { index, sample -> sample.copy(sequence = index) }
 
     return preferred.copy(
         sourceRecordId = minOf(sourceRecordId, other.sourceRecordId),
@@ -105,11 +124,12 @@ internal fun RideRecord.mergeDuplicate(other: RideRecord): RideRecord {
         meanHeartRateBpm = preferred.meanHeartRateBpm ?: fallback.meanHeartRateBpm,
         maxHeartRateBpm = preferred.maxHeartRateBpm ?: fallback.maxHeartRateBpm,
         bikeName = preferred.bikeName ?: fallback.bikeName,
-        routePoints = mergedRoute
+        routePoints = mergedRoute,
+        exerciseSamples = mergedSamples
     )
 }
 
-internal data class SyncResult(val rides: Int, val routePoints: Int)
+internal data class SyncResult(val rides: Int, val routePoints: Int, val exerciseSamples: Int)
 
 internal class SyncHttpException(val statusCode: Int, message: String) : IOException(message)
 
@@ -143,12 +163,7 @@ internal object SamsungRideSyncEngine {
             locations.contains(locationPermission)
         }.getOrDefault(false)
 
-        val request = DataTypes.EXERCISE.readDataRequestBuilder
-            .setLocalTimeFilter(LocalTimeFilter.of(fromDate.atStartOfDay(), toDate.plusDays(1).atStartOfDay()))
-            .setOrdering(com.samsung.android.sdk.health.data.request.Ordering.DESC)
-            .setLimit(1000)
-            .build()
-        val points = store.readData(request).dataList
+        val points = readExerciseWindow(store, fromDate, toDate)
         val cyclingTypes = setOf(
             DataType.ExerciseType.PredefinedExerciseType.BIKING,
             DataType.ExerciseType.PredefinedExerciseType.MOUNTAIN_BIKING,
@@ -168,22 +183,46 @@ internal object SamsungRideSyncEngine {
         return unique.sortedByDescending { it.startTime }
     }
 
+    private suspend fun readExerciseWindow(
+        store: com.samsung.android.sdk.health.data.HealthDataStore,
+        fromDate: LocalDate,
+        toDate: LocalDate
+    ): List<com.samsung.android.sdk.health.data.data.HealthDataPoint> {
+        val request = DataTypes.EXERCISE.readDataRequestBuilder
+            .setLocalTimeFilter(LocalTimeFilter.of(fromDate.atStartOfDay(), toDate.plusDays(1).atStartOfDay()))
+            .setOrdering(com.samsung.android.sdk.health.data.request.Ordering.DESC)
+            .setLimit(1000)
+            .build()
+        val data = store.readData(request).dataList
+        if (data.size < 1000 || fromDate >= toDate) return data
+
+        // Samsung's read limit returns only the first 1000 rows. Split full
+        // date ranges so the one-time history backfill does not silently omit
+        // older workouts when a broad request hits that cap.
+        val midpoint = fromDate.plusDays(java.time.temporal.ChronoUnit.DAYS.between(fromDate, toDate) / 2)
+        return readExerciseWindow(store, fromDate, midpoint) +
+            readExerciseWindow(store, midpoint.plusDays(1), toDate)
+    }
+
     fun sync(token: String, rides: List<RideRecord>): SyncResult {
         val batches = uploadBatches(rides)
         var syncedRides = 0
         var syncedPoints = 0
+        var syncedSamples = 0
         batches.forEach { batch ->
             val result = uploadBatch(token, batch)
             syncedRides += result.first
             syncedPoints += result.second
+            syncedSamples += result.third
         }
-        return SyncResult(syncedRides, syncedPoints)
+        return SyncResult(rides.map { it.sourceRecordId }.distinct().size, syncedPoints, syncedSamples)
     }
 
     private fun ExerciseSession.toRide(recordId: String, index: Int, includeRoute: Boolean): RideRecord {
         val routePoints = if (includeRoute) {
-            route.orEmpty().sortedBy { it.timestamp }.mapNotNull { it.toRoutePointOrNull() }
+            route.orEmpty().sortedBy { it.timestamp }.mapIndexedNotNull { index, location -> location.toRoutePointOrNull(index) }
         } else emptyList()
+        val samples = log.orEmpty().sortedBy { it.timestamp }.mapIndexed { index, entry -> entry.toExerciseSample(index) }
         val duration = this.duration.toMillis().coerceAtLeast(0).toDouble() / 1000.0
         val elapsed = Duration.between(this.startTime, this.endTime).toMillis().coerceAtLeast(0).toDouble() / 1000.0
         val type = this.exerciseType.toString()
@@ -212,16 +251,26 @@ internal object SamsungRideSyncEngine {
             meanHeartRateBpm = finiteDouble(this.meanHeartRate),
             maxHeartRateBpm = finiteDouble(this.maxHeartRate),
             bikeName = BIKE_NAME,
-            routePoints = routePoints
+            routePoints = routePoints,
+            exerciseSamples = samples
         )
     }
 
-    private fun ExerciseLocation.toRoutePointOrNull(): RoutePoint? {
+    private fun ExerciseLocation.toRoutePointOrNull(sequence: Int): RoutePoint? {
         if (!latitude.isFinite() || !longitude.isFinite()) return null
-        return RoutePoint(timestamp, latitude.toDouble(), longitude.toDouble(), finiteDouble(altitude))
+        return RoutePoint(timestamp, latitude.toDouble(), longitude.toDouble(), finiteDouble(altitude), sequence)
     }
 
-    private fun uploadBatch(token: String, rides: List<RideRecord>): Pair<Int, Int> {
+    private fun ExerciseLog.toExerciseSample(sequence: Int) = ExerciseSample(
+        timestamp = timestamp,
+        heartRateBpm = finiteDouble(heartRate),
+        cadenceRpm = finiteDouble(cadence),
+        powerWatts = finiteDouble(power),
+        speedMetersPerSecond = finiteDouble(speed),
+        sequence = sequence
+    )
+
+    private fun uploadBatch(token: String, rides: List<RideRecord>): Triple<Int, Int, Int> {
         val connection = (URL(SYNC_URL).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 20_000
@@ -251,7 +300,11 @@ internal object SamsungRideSyncEngine {
             }
             val response = JSONObject(responseText)
             if (!response.optBoolean("ok")) throw IOException("RideScope did not confirm the sync.")
-            return response.optInt("ridesSynced") to response.optInt("routePointsSynced")
+            return Triple(
+                response.optInt("ridesSynced"),
+                response.optInt("routePointsSynced"),
+                response.optInt("exerciseSamplesSynced")
+            )
         } finally {
             connection.disconnect()
         }
@@ -261,22 +314,48 @@ internal object SamsungRideSyncEngine {
         val batches = mutableListOf<List<RideRecord>>()
         var current = mutableListOf<RideRecord>()
         var currentPointCount = 0
-        records.forEach { ride ->
-            if (ride.routePoints.size > ROUTE_POINTS_PER_UPLOAD) {
-                throw IllegalStateException("A ride has too many GPS points to upload in one request.")
-            }
+        records.flatMap(::splitRideForUpload).forEach { ride ->
+            val rideSampleCount = ride.routePoints.size + ride.exerciseSamples.size
             if (current.isNotEmpty() &&
-                (current.size >= RIDES_PER_UPLOAD || currentPointCount + ride.routePoints.size > ROUTE_POINTS_PER_UPLOAD)
+                (current.size >= RIDES_PER_UPLOAD || currentPointCount + rideSampleCount > SAMPLES_PER_UPLOAD)
             ) {
                 batches.add(current)
                 current = mutableListOf()
                 currentPointCount = 0
             }
             current.add(ride)
-            currentPointCount += ride.routePoints.size
+            currentPointCount += rideSampleCount
         }
         if (current.isNotEmpty()) batches.add(current)
         return batches
+    }
+
+    private fun splitRideForUpload(ride: RideRecord): List<RideRecord> {
+        if (ride.routePoints.size + ride.exerciseSamples.size <= SAMPLES_PER_UPLOAD) return listOf(ride)
+        val chunks = mutableListOf<RideRecord>()
+        var routeOffset = 0
+        var sampleOffset = 0
+        var replaceRoute = true
+        var replaceSamples = true
+        while (routeOffset < ride.routePoints.size || sampleOffset < ride.exerciseSamples.size) {
+            var remaining = SAMPLES_PER_UPLOAD
+            val routeEnd = minOf(routeOffset + remaining, ride.routePoints.size)
+            val routeChunk = ride.routePoints.subList(routeOffset, routeEnd)
+            routeOffset = routeEnd
+            remaining -= routeChunk.size
+            val sampleEnd = minOf(sampleOffset + remaining, ride.exerciseSamples.size)
+            val sampleChunk = ride.exerciseSamples.subList(sampleOffset, sampleEnd)
+            sampleOffset = sampleEnd
+            chunks += ride.copy(
+                routePoints = routeChunk,
+                exerciseSamples = sampleChunk,
+                replaceRoutePoints = replaceRoute && routeChunk.isNotEmpty(),
+                replaceExerciseSamples = replaceSamples && sampleChunk.isNotEmpty()
+            )
+            if (routeChunk.isNotEmpty()) replaceRoute = false
+            if (sampleChunk.isNotEmpty()) replaceSamples = false
+        }
+        return chunks
     }
 
     private fun syncPayload(records: List<RideRecord>): String = JSONObject().apply {
@@ -307,13 +386,27 @@ internal object SamsungRideSyncEngine {
                     putNullable(this, "maxHeartRateBpm", ride.maxHeartRateBpm)
                     putNullable(this, "bikeName", ride.bikeName)
                     put("routePoints", JSONArray().apply {
-                        ride.routePoints.forEachIndexed { index, point ->
+                        ride.routePoints.forEach { point ->
                             put(JSONObject().apply {
-                                put("sequence", index)
+                                put("sequence", point.sequence)
                                 put("timestamp", point.timestamp.toString())
                                 put("latitude", point.latitude)
                                 put("longitude", point.longitude)
                                 putNullable(this, "altitudeMeters", point.altitudeMeters)
+                            })
+                        }
+                    })
+                    put("replaceRoutePoints", ride.replaceRoutePoints)
+                    put("replaceExerciseSamples", ride.replaceExerciseSamples)
+                    put("exerciseSamples", JSONArray().apply {
+                        ride.exerciseSamples.forEach { sample ->
+                            put(JSONObject().apply {
+                                put("sequence", sample.sequence)
+                                put("timestamp", sample.timestamp.toString())
+                                putNullable(this, "heartRateBpm", sample.heartRateBpm)
+                                putNullable(this, "cadenceRpm", sample.cadenceRpm)
+                                putNullable(this, "powerWatts", sample.powerWatts)
+                                putNullable(this, "speedMetersPerSecond", sample.speedMetersPerSecond)
                             })
                         }
                     })
@@ -322,7 +415,7 @@ internal object SamsungRideSyncEngine {
         })
     }.toString()
 
-    private fun finiteDouble(value: Float?): Double? = value?.takeIf { it.isFinite() }?.toDouble()
+    private fun finiteDouble(value: Number?): Double? = value?.toDouble()?.takeIf { it.isFinite() }
 
     private fun putNullable(json: JSONObject, key: String, value: Any?) {
         json.put(key, value ?: JSONObject.NULL)

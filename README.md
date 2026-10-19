@@ -1,6 +1,6 @@
 # RideScope
 
-RideScope turns a Strava activity export into a polished, interactive cycling dashboard. Ride records live in Neon PostgreSQL, the server reads them through a private connection, and the website refreshes its view automatically.
+RideScope turns Strava exports and Samsung Health rides into a polished, interactive cycling dashboard. Ride records live in Neon PostgreSQL, the server reads them through a private connection, and the website refreshes its view automatically.
 
 **Live dashboard:** [sparshrides.vercel.app](https://sparshrides.vercel.app)
 
@@ -18,7 +18,7 @@ Add or edit a ride in Neon
 
 The normal workflow is simple: add a row in Neon’s table editor, save it, and RideScope picks it up on its next sync. While the site is open, it checks for database changes about once a minute. Use **Sync** to refresh immediately, or reload the page. Adding a ride does not require a code change, CSV import, or Vercel deployment.
 
-> **Privacy:** RideScope has no visitor sign-in. Its read-only `GET /api/rides` endpoint returns the ride data used by the dashboard to anyone who visits the site. Store only information you are comfortable making public. The database connection string stays on the server and is never sent to the browser.
+> **Privacy:** The dashboard's ride summaries remain public through `GET /api/rides`. Exact GPS coordinates and timestamped heart-rate, speed, cadence, and power samples are served only by a password-protected private analysis API. Set `ROUTE_VIEW_PASSWORD` in Vercel Production to enable it. No third-party map provider receives route coordinates.
 
 ## Add a ride
 
@@ -40,20 +40,21 @@ LIMIT 20;
 
 ## Samsung Health sync
 
-The Android app in **android/** reads Samsung Health cycling sessions and uploads new rides to the server-side API. The API writes summaries to `rides` and ordered GPS samples to `ride_route_points` in Neon. Existing Strava rows remain intact. Samsung source IDs make uploads idempotent: retrying a batch updates the same ride rather than adding a duplicate. If route permission is declined, summaries still sync; a later sync with route access fills in the route. When automatic sync is first enabled, the app marks rides from earlier dates in its 30-day lookback as known; rides recorded today stay eligible so a same-day setup cannot accidentally skip a new workout. The app also recovers same-day rides that an earlier baseline version had skipped.
+The Android app in **android/** reads Samsung Health cycling sessions and uploads new rides to the server-side API. It stores summaries in `rides`, ordered GPS points in `ride_route_points`, and measured workout samples in `ride_exercise_samples`. Samsung source IDs make uploads idempotent: retrying a batch updates the same ride rather than adding a duplicate. If route access is declined, summaries still sync; a later sync with route access fills in route data. The one-time **Sync previous rides and GPS routes** action re-uploads history so previously recorded routes and available workout samples are backfilled to Neon.
 
-Samsung provides a session duration plus start and end timestamps, but no separate moving-time field. RideScope uses the start/end difference for `Elapsed_Time` and Samsung's session duration for `Moving_Time`. Synced Samsung sessions are labeled `Device = Watch` and `Bike = Fuji`; distance is stored in kilometres, elevation in metres, and speeds in kilometres per hour. Heart-rate fields use Samsung's mean and maximum values. Missing Samsung metrics remain unavailable. Recorded GPS points are stored exactly in Neon. The dashboard currently displays the ride summaries; route points are not exposed by a public route endpoint yet.
+Samsung provides a session duration plus start and end timestamps, but no separate moving-time field. RideScope uses the start/end difference for `Elapsed_Time` and Samsung's session duration for `Moving_Time`. Synced Samsung sessions are labeled `Device = Watch` and `Bike = Fuji`; distance is stored in kilometres, elevation in metres, and speeds in kilometres per hour. Heart-rate fields use Samsung's mean and maximum values. Missing Samsung metrics remain unavailable. Individual ride analysis shows summary values, an exact route map, GPS-derived elevation profile, and any heart-rate, speed, cadence, or power samples Samsung recorded. The precise route and sample charts require the private-view password; the server uses a short-lived HttpOnly cookie and does not send coordinates to a map tile service.
 
 ### Configure and run the Android app
 
 1. Open **android/** in Android Studio and sync Gradle. The project uses the Samsung Health Data SDK AAR at **android/app/libs/** and includes its Kotlin Parcelize and Gson runtime dependencies; the licensed AAR is ignored by Git. If the local copy is missing, download the SDK from [Samsung Developer](https://developer.samsung.com/health/data/overview.html), accept its terms, and copy the API AAR into that folder.
 2. Use a physical Android 10+ Samsung phone with Samsung Health 6.30.2 or later. Samsung Health Data SDK does not support emulators. Enable **Developer Mode (Samsung Health Data SDK) → Data Read** in Samsung Health; see Samsung's [developer mode guide](https://developer.samsung.com/health/data/guide/developer-mode.html).
 3. In the Vercel project, add `SYNC_TOKEN` to the Production environment. Use a long random value and keep it private. The server also needs its existing `DATABASE_URL` Neon integration.
-4. Run `npm run db:migrate-samsung` once against the same Neon database configured for Vercel, with `DATABASE_URL` set in `.env.local`. It adds source metadata and the route-points table without deleting existing rides. If you prefer Neon SQL Editor, run [`db/schema.sql`](db/schema.sql) there.
-5. Re-deploy after setting the Vercel environment variable. The Android app uses `https://sparshrides.vercel.app/api/sync/samsung`.
+4. Run `npm run db:migrate-samsung` once against the same Neon database configured for Vercel, with `DATABASE_URL` set in `.env.local`. It adds source metadata, route points, and workout-sample storage without deleting existing rides. If you prefer Neon SQL Editor, run [`db/schema.sql`](db/schema.sql) there.
+5. Add a strong random `ROUTE_VIEW_PASSWORD` (at least 16 characters; 32+ recommended) to the Vercel Production environment. This is separate from `SYNC_TOKEN`. Re-deploy after setting the environment variables. The Android app uses `https://sparshrides.vercel.app/api/sync/samsung`.
 6. Run the app and grant Samsung exercise access; grant route access if you want GPS tracks.
 7. Paste the same `SYNC_TOKEN` into the app and enable **Automatic sync**. The token is encrypted at rest with Android Keystore. On first enable, rides from earlier dates in the last 30 days are treated as history; today's rides remain eligible for upload.
-8. WorkManager checks for new rides about every 15 minutes while the app is closed, and Android may delay checks for battery saving. Android's periodic work minimum is 15 minutes, so reliable five-minute background polling isn't supported by the standard scheduler. **Check for new rides now** runs an immediate check.
+8. Tap **Sync previous rides and GPS routes** once to backfill historical route points and workout samples. Grant Samsung exercise-location access when asked. This sync is idempotent and does not create duplicate ride summaries.
+9. WorkManager checks for new rides about every 15 minutes while the app is closed, and Android may delay checks for battery saving. Android's periodic work minimum is 15 minutes, so reliable five-minute background polling isn't supported by the standard scheduler. **Check for new rides now** runs an immediate check.
 
 Samsung requires app verification before public distribution; see its [verification guide](https://developer.samsung.com/health/data/guide/app-verification.html). Local testing on your own phone can use Samsung Health developer mode.
 
@@ -63,6 +64,7 @@ Samsung requires app verification before public distribution; see its [verificat
 - Calendar heatmap, weekly and monthly trends, and ride-by-ride exploration.
 - Bike, consistency, goal, performance, terrain, time-of-day, and heart-rate views.
 - Search, sorting, filters, favorites, ride details, and CSV export.
+- Individual ride analysis with measured workout charts, an exact private route map, and route elevation profile.
 - Light and dark themes, six accent palettes, and personal goals saved in the browser.
 - Responsive layouts, keyboard-friendly controls, and reduced-motion support.
 
@@ -148,8 +150,11 @@ PostgreSQL generates the `id`. `ride_date` is required; `start_time` and metric 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/rides` | Returns the rows used by the dashboard. Public and read-only. Responses use `Cache-Control: no-store`. |
+| `POST /api/route-access` | Checks `ROUTE_VIEW_PASSWORD` and sets a short-lived HttpOnly private-analysis session cookie. |
+| `POST /api/route-access/logout` | Clears the private-analysis session cookie. |
+| `GET /api/rides/:id/analysis` | Returns exact GPS points and actual workout samples. Requires the private-analysis session cookie. |
 | `GET /api/health` | Reports whether the database is configured and reachable, and how many rides are present. It does not return credentials. |
-| `POST /api/sync/samsung` | Upserts Samsung ride summaries and route points. Requires `Authorization: Bearer <SYNC_TOKEN>`; route data is stored in `ride_route_points`. |
+| `POST /api/sync/samsung` | Upserts Samsung ride summaries, route points, and recorded exercise samples. Requires `Authorization: Bearer <SYNC_TOKEN>`. |
 
 ## Project structure
 
@@ -162,6 +167,7 @@ PostgreSQL generates the `id`. `ride_date` is required; `start_time` and metric 
 | `src/styles.css` | Themes, responsive components, and animation system |
 | `server/index.js` | Express API and server-side Neon queries |
 | `db/schema.sql` | PostgreSQL table and index definition |
+| `scripts/migrate-samsung.js` | Safe additive migration for Samsung metadata, route points, and measured exercise samples |
 | `scripts/import-csv.js` | Validated, explicit CSV replacement import |
 | `vercel.json` | Vercel build and function configuration |
 

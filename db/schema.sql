@@ -45,3 +45,15 @@ CREATE TABLE IF NOT EXISTS ride_route_points (
   altitude_meters numeric(10, 3),
   PRIMARY KEY (ride_id, sequence)
 );
+
+-- Private per-second/per-sample exercise metrics used by individual ride analysis.
+CREATE TABLE IF NOT EXISTS ride_exercise_samples (
+  ride_id bigint NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+  sequence integer NOT NULL CHECK (sequence >= 0),
+  recorded_at timestamptz NOT NULL,
+  heart_rate_bpm numeric(8, 2),
+  cadence_rpm numeric(8, 2),
+  power_watts numeric(10, 2),
+  speed_meters_per_second numeric(10, 4),
+  PRIMARY KEY (ride_id, sequence)
+);

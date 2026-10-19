@@ -1,6 +1,14 @@
 export type Ride = {
   /** Stable row key for favorites and detail views. */
   id: string;
+  /** Neon primary key used for private analysis endpoints. */
+  databaseId: string | null;
+  /** Source workout duration, when supplied independently of elapsed time. */
+  durationSeconds: number | null;
+  caloriesKcal: number | null;
+  sourceSystem: string | null;
+  activityType: string | null;
+  title: string | null;
   /** ISO calendar date, normalized from the database record. */
   date: string;
   /** Optional local clock time when the source row contains one. */

@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import express from "express";
 import { neon } from "@neondatabase/serverless";
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,7 +11,10 @@ dotenv.config({ path: [path.join(ROOT, ".env.local"), path.join(ROOT, ".env")] }
 const PORT = Number(process.env.PORT || 8787);
 const DATABASE_URL = process.env.DATABASE_URL;
 const SAMSUNG_SYNC_TOKEN = process.env.SYNC_TOKEN;
+const ROUTE_VIEW_PASSWORD = process.env.ROUTE_VIEW_PASSWORD;
 const sql = DATABASE_URL ? neon(DATABASE_URL) : null;
+const ROUTE_COOKIE = "ridescope_private_access";
+const ROUTE_SESSION_SECONDS = 12 * 60 * 60;
 
 const RIDE_HEADERS = [
   "Date",
@@ -32,7 +35,8 @@ if (!DATABASE_URL) {
 }
 
 const app = express();
-app.use(express.json({ limit: "12mb" }));
+// Leave headroom below Vercel Functions' 4.5 MB request limit.
+app.use(express.json({ limit: "4mb" }));
 
 function noStore(res) {
   res.set("Cache-Control", "no-store");
@@ -49,6 +53,24 @@ function isAuthorizedSync(req) {
 
   const expected = Buffer.from(SAMSUNG_SYNC_TOKEN);
   const supplied = Buffer.from(match[1]);
+  return expected.length === supplied.length && timingSafeEqual(expected, supplied);
+}
+
+function routeSessionSignature(expiresAt) {
+  return createHmac("sha256", ROUTE_VIEW_PASSWORD).update(String(expiresAt)).digest("hex");
+}
+
+function hasPrivateRouteAccess(req) {
+  if (!ROUTE_VIEW_PASSWORD || ROUTE_VIEW_PASSWORD.length < 16) return false;
+  const cookieHeader = req.get("cookie") || "";
+  const token = cookieHeader.split(";").map(value => value.trim())
+    .find(value => value.startsWith(`${ROUTE_COOKIE}=`))?.slice(ROUTE_COOKIE.length + 1);
+  if (!token) return false;
+  const [expiresText, signature] = token.split(".");
+  const expiresAt = Number(expiresText);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000) || !signature) return false;
+  const expected = Buffer.from(routeSessionSignature(expiresAt));
+  const supplied = Buffer.from(signature);
   return expected.length === supplied.length && timingSafeEqual(expected, supplied);
 }
 
@@ -110,6 +132,7 @@ function normalizeSamsungSync(body) {
 
   const seenIds = new Set();
   let routePointCount = 0;
+  let exerciseSampleCount = 0;
   const rides = body.rides.map((ride, rideIndex) => {
     const prefix = `rides[${rideIndex}]`;
     if (!ride || typeof ride !== "object" || Array.isArray(ride)) {
@@ -158,6 +181,36 @@ function normalizeSamsungSync(body) {
     const sequences = new Set(routePoints.map(point => point.sequence));
     if (sequences.size !== routePoints.length) throw new TypeError(`${prefix}.routePoints contains duplicate sequence values.`);
 
+    const rawSamples = ride.exerciseSamples ?? [];
+    if (!Array.isArray(rawSamples) || rawSamples.length > 50000) {
+      throw new TypeError(`${prefix}.exerciseSamples must be an array with at most 50000 samples.`);
+    }
+    exerciseSampleCount += rawSamples.length;
+    if (exerciseSampleCount > 50000) throw new TypeError("Each sync request is limited to 50000 exercise samples.");
+    const exerciseSamples = rawSamples.map((sample, sampleIndex) => {
+      if (!sample || typeof sample !== "object" || Array.isArray(sample)) {
+        throw new TypeError(`${prefix}.exerciseSamples[${sampleIndex}] must be an object.`);
+      }
+      if (!Number.isSafeInteger(sample.sequence) || sample.sequence < 0) {
+        throw new TypeError(`${prefix}.exerciseSamples[${sampleIndex}].sequence must be a non-negative integer.`);
+      }
+      return {
+        sequence: sample.sequence,
+        timestamp: validTimestamp(sample.timestamp, `${prefix}.exerciseSamples[${sampleIndex}].timestamp`),
+        heart_rate_bpm: optionalNumber(sample.heartRateBpm, `${prefix}.exerciseSamples[${sampleIndex}].heartRateBpm`, 0, 300),
+        cadence_rpm: optionalNumber(sample.cadenceRpm, `${prefix}.exerciseSamples[${sampleIndex}].cadenceRpm`, 0, 500),
+        power_watts: optionalNumber(sample.powerWatts, `${prefix}.exerciseSamples[${sampleIndex}].powerWatts`, 0, 5000),
+        speed_meters_per_second: optionalNumber(sample.speedMetersPerSecond, `${prefix}.exerciseSamples[${sampleIndex}].speedMetersPerSecond`, 0, 100)
+      };
+    });
+    const sampleSequences = new Set(exerciseSamples.map(sample => sample.sequence));
+    if (sampleSequences.size !== exerciseSamples.length) throw new TypeError(`${prefix}.exerciseSamples contains duplicate sequence values.`);
+    const replaceRoutePoints = ride.replaceRoutePoints === undefined ? true : ride.replaceRoutePoints;
+    const replaceExerciseSamples = ride.replaceExerciseSamples === undefined ? true : ride.replaceExerciseSamples;
+    if (typeof replaceRoutePoints !== "boolean" || typeof replaceExerciseSamples !== "boolean") {
+      throw new TypeError(`${prefix} replacement flags must be boolean values.`);
+    }
+
     return {
       source_record_id: sourceRecordId,
       source_fingerprint: requiredText(ride.fingerprint, `${prefix}.fingerprint`, 128),
@@ -179,11 +232,17 @@ function normalizeSamsungSync(body) {
       mean_heart_rate_bpm: optionalNumber(ride.meanHeartRateBpm, `${prefix}.meanHeartRateBpm`, 0, 300),
       max_heart_rate_bpm: optionalNumber(ride.maxHeartRateBpm, `${prefix}.maxHeartRateBpm`, 0, 300),
       bike_name: optionalText(ride.bikeName, `${prefix}.bikeName`, 200) ?? "Fuji",
-      route_points: routePoints
+      route_points: routePoints,
+      exercise_samples: exerciseSamples,
+      replace_route_points: replaceRoutePoints,
+      replace_exercise_samples: replaceExerciseSamples
     };
   });
 
-  return { timezone, rides, routePointCount };
+  if (routePointCount + exerciseSampleCount > 50000) {
+    throw new TypeError("Each sync request is limited to 50000 total route and exercise samples.");
+  }
+  return { timezone, rides, routePointCount, exerciseSampleCount };
 }
 
 app.get("/api/rides", async (_req, res) => {
@@ -203,6 +262,7 @@ app.get("/api/rides", async (_req, res) => {
           WHEN start_time IS NULL THEN to_char(ride_date, 'YYYY-MM-DD')
           ELSE to_char(ride_date, 'YYYY-MM-DD') || ' ' || to_char(start_time, 'HH24:MI:SS')
         END AS activity_date,
+        id AS database_id,
         elapsed_time,
         moving_time,
         distance,
@@ -212,7 +272,12 @@ app.get("/api/rides", async (_req, res) => {
         device,
         hr_max,
         hr_mean,
-        bike
+        bike,
+        duration_seconds,
+        calories_kcal,
+        source_system,
+        activity_type,
+        title
       FROM rides
       ORDER BY id ASC
     `;
@@ -231,6 +296,14 @@ app.get("/api/rides", async (_req, res) => {
         ride.hr_mean,
         ride.bike
       ]))],
+      rides: rides.map(ride => ({
+        databaseId: String(ride.database_id),
+        durationSeconds: ride.duration_seconds,
+        caloriesKcal: ride.calories_kcal,
+        sourceSystem: ride.source_system,
+        activityType: ride.activity_type,
+        title: ride.title
+      })),
       syncedAt: new Date().toISOString()
     });
   } catch (error) {
@@ -238,6 +311,74 @@ app.get("/api/rides", async (_req, res) => {
     return res.status(500).send(
       "Could not read rides from PostgreSQL. Check /api/health and confirm the rides table has been imported."
     );
+  }
+});
+
+app.post("/api/route-access", (req, res) => {
+  noStore(res);
+  if (!ROUTE_VIEW_PASSWORD || ROUTE_VIEW_PASSWORD.length < 16) {
+    return res.status(503).json({ ok: false, error: "Private ride analysis is not configured on the server." });
+  }
+  const supplied = Buffer.from(typeof req.body?.password === "string" ? req.body.password : "");
+  const expected = Buffer.from(ROUTE_VIEW_PASSWORD);
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+    return res.status(401).json({ ok: false, error: "That password did not unlock private ride analysis." });
+  }
+  const expiresAt = Math.floor(Date.now() / 1000) + ROUTE_SESSION_SECONDS;
+  const signature = routeSessionSignature(expiresAt);
+  const secure = req.secure || req.get("x-forwarded-proto") === "https";
+  res.set("Set-Cookie", `${ROUTE_COOKIE}=${expiresAt}.${signature}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=${ROUTE_SESSION_SECONDS}${secure ? "; Secure" : ""}`);
+  return res.json({ ok: true, expiresAt });
+});
+
+app.post("/api/route-access/logout", (_req, res) => {
+  noStore(res);
+  const secure = _req.secure || _req.get("x-forwarded-proto") === "https";
+  res.set("Set-Cookie", `${ROUTE_COOKIE}=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0${secure ? "; Secure" : ""}`);
+  return res.json({ ok: true });
+});
+
+app.get("/api/rides/:rideId/analysis", async (req, res) => {
+  noStore(res);
+  if (!hasPrivateRouteAccess(req)) return res.status(401).json({ ok: false, error: "Unlock private ride analysis to view this data." });
+  if (!sql) return res.status(503).json({ ok: false, error: "Database is not configured on the server." });
+  if (!/^\d{1,18}$/.test(req.params.rideId)) return res.status(400).json({ ok: false, error: "Invalid ride ID." });
+
+  try {
+    const rideId = req.params.rideId;
+    const [ride] = await sql`SELECT id, duration_seconds, calories_kcal, source_system, activity_type, title FROM rides WHERE id = ${rideId}`;
+    if (!ride) return res.status(404).json({ ok: false, error: "Ride not found." });
+    const [routePoints, exerciseSamples] = await Promise.all([
+      sql`SELECT recorded_at, latitude, longitude, altitude_meters FROM ride_route_points WHERE ride_id = ${rideId} ORDER BY sequence ASC`,
+      sql`SELECT recorded_at, heart_rate_bpm, cadence_rpm, power_watts, speed_meters_per_second FROM ride_exercise_samples WHERE ride_id = ${rideId} ORDER BY sequence ASC`
+    ]);
+    return res.json({
+      ok: true,
+      ride: {
+        databaseId: String(ride.id),
+        durationSeconds: ride.duration_seconds,
+        caloriesKcal: ride.calories_kcal,
+        sourceSystem: ride.source_system,
+        activityType: ride.activity_type,
+        title: ride.title
+      },
+      routePoints: routePoints.map(point => ({
+        timestamp: point.recorded_at,
+        latitude: Number(point.latitude),
+        longitude: Number(point.longitude),
+        altitudeMeters: point.altitude_meters === null ? null : Number(point.altitude_meters)
+      })),
+      exerciseSamples: exerciseSamples.map(sample => ({
+        timestamp: sample.recorded_at,
+        heartRateBpm: sample.heart_rate_bpm === null ? null : Number(sample.heart_rate_bpm),
+        cadenceRpm: sample.cadence_rpm === null ? null : Number(sample.cadence_rpm),
+        powerWatts: sample.power_watts === null ? null : Number(sample.power_watts),
+        speedMetersPerSecond: sample.speed_meters_per_second === null ? null : Number(sample.speed_meters_per_second)
+      }))
+    });
+  } catch (error) {
+    console.error("Private ride analysis query failed:", error instanceof Error ? error.message : error);
+    return res.status(500).json({ ok: false, error: "Could not load private ride analysis." });
   }
 });
 
@@ -373,7 +514,8 @@ app.post("/api/sync/samsung", async (req, res) => {
         WITH incoming AS (
           SELECT * FROM jsonb_to_recordset(${serialized}::jsonb) AS ride(
             source_record_id text,
-            route_points jsonb
+            route_points jsonb,
+            replace_route_points boolean
           )
         )
         DELETE FROM ride_route_points AS route
@@ -381,6 +523,7 @@ app.post("/api/sync/samsung", async (req, res) => {
         WHERE route.ride_id = saved.id
           AND saved.source_system = 'samsung_health'
           AND saved.source_record_id = incoming.source_record_id
+          AND incoming.replace_route_points
           AND jsonb_array_length(incoming.route_points) > 0
       `,
       tx`
@@ -412,12 +555,61 @@ app.post("/api/sync/samsung", async (req, res) => {
           latitude = EXCLUDED.latitude,
           longitude = EXCLUDED.longitude,
           altitude_meters = EXCLUDED.altitude_meters
+      `,
+      tx`
+        WITH incoming AS (
+          SELECT * FROM jsonb_to_recordset(${serialized}::jsonb) AS ride(
+            source_record_id text,
+            exercise_samples jsonb,
+            replace_exercise_samples boolean
+          )
+        )
+        DELETE FROM ride_exercise_samples AS sample
+        USING rides AS saved, incoming
+        WHERE sample.ride_id = saved.id
+          AND saved.source_system = 'samsung_health'
+          AND saved.source_record_id = incoming.source_record_id
+          AND incoming.replace_exercise_samples
+          AND jsonb_array_length(incoming.exercise_samples) > 0
+      `,
+      tx`
+        WITH incoming AS (
+          SELECT * FROM jsonb_to_recordset(${serialized}::jsonb) AS ride(
+            source_record_id text,
+            exercise_samples jsonb
+          )
+        ), samples AS (
+          SELECT incoming.source_record_id, item.*
+          FROM incoming
+          CROSS JOIN LATERAL jsonb_to_recordset(incoming.exercise_samples) AS item(
+            sequence integer,
+            timestamp timestamptz,
+            heart_rate_bpm double precision,
+            cadence_rpm double precision,
+            power_watts double precision,
+            speed_meters_per_second double precision
+          )
+        )
+        INSERT INTO ride_exercise_samples (ride_id, sequence, recorded_at, heart_rate_bpm, cadence_rpm, power_watts, speed_meters_per_second)
+        SELECT saved.id, samples.sequence, samples.timestamp, samples.heart_rate_bpm, samples.cadence_rpm, samples.power_watts, samples.speed_meters_per_second
+        FROM samples
+        JOIN rides AS saved
+          ON saved.source_system = 'samsung_health'
+         AND saved.source_record_id = samples.source_record_id
+        ON CONFLICT (ride_id, sequence)
+        DO UPDATE SET
+          recorded_at = EXCLUDED.recorded_at,
+          heart_rate_bpm = EXCLUDED.heart_rate_bpm,
+          cadence_rpm = EXCLUDED.cadence_rpm,
+          power_watts = EXCLUDED.power_watts,
+          speed_meters_per_second = EXCLUDED.speed_meters_per_second
       `
     ]);
     return res.json({
       ok: true,
       ridesSynced: transaction[0].length,
-      routePointsSynced: sync.routePointCount
+      routePointsSynced: sync.routePointCount,
+      exerciseSamplesSynced: sync.exerciseSampleCount
     });
   } catch (error) {
     console.error("Samsung ride sync failed:", error instanceof Error ? error.name : "Unknown error");

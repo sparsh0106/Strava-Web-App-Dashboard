@@ -214,10 +214,59 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.fillMaxWidth()
                         ) { Text(if (working) "Checking rides…" else "Check for new rides now") }
 
+                        OutlinedButton(
+                            onClick = {
+                                if (syncToken.isBlank()) {
+                                    status = "Enter the RideScope sync token first."
+                                } else {
+                                    working = true
+                                    rides = emptyList()
+                                    SyncTokenVault.save(context, syncToken.trim())
+                                    status = "Reading your previous Samsung Health cycling rides and recorded GPS routes…"
+                                    lifecycleScope.launch {
+                                        try {
+                                            val today = LocalDate.now()
+                                            val history = SamsungRideSyncEngine.readCyclingRides(
+                                                context,
+                                                LocalDate.of(2000, 1, 1),
+                                                today,
+                                                this@MainActivity
+                                            )
+                                            if (history.isEmpty()) {
+                                                status = "No cycling rides were found in Samsung Health."
+                                            } else {
+                                                status = "Uploading ${history.size} previous rides, routes, and available workout samples…"
+                                                val result = withContext(Dispatchers.IO) {
+                                                    SamsungRideSyncEngine.sync(syncToken.trim(), history)
+                                                }
+                                                AutoSyncState.markSynced(context, history)
+                                                rides = history.take(30)
+                                                status = "Backfill complete · ${result.rides} rides, ${result.routePoints} GPS points, and ${result.exerciseSamples} workout samples saved to RideScope."
+                                            }
+                                            AutoSyncState.setStatus(context, status)
+                                        } catch (error: Exception) {
+                                            resolveSamsungError(error)
+                                            status = error.message ?: "Could not backfill previous Samsung Health rides. Try again."
+                                            AutoSyncState.setStatus(context, status)
+                                        } finally {
+                                            working = false
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = !working,
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(if (working) "Backfilling rides…" else "Sync previous rides and GPS routes") }
+
+                        Text(
+                            "One-time history backfill: safely re-uploads existing Samsung workouts using idempotent ride IDs. Exact GPS routes and available heart-rate, speed, cadence, and power samples are saved to your database.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("PRIVATE UPLOAD", style = MaterialTheme.typography.labelLarge)
-                                Text("Your sync token is encrypted on this phone. Only rides not seen before are uploaded over HTTPS. New rides include summaries and any available GPS points.")
+                                Text("Your sync token is encrypted on this phone. Automatic sync uploads only new rides. The one-time history action re-uploads older rides safely so their GPS routes and available workout samples reach the database.")
                             }
                         }
 
