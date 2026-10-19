@@ -127,6 +127,9 @@ function normalizeSamsungSync(body) {
     if (durationSeconds === null || elapsedSeconds === null) {
       throw new TypeError(`${prefix} must include durationSeconds and elapsedSeconds.`);
     }
+    const movingTimeSeconds = ride.movingTimeSeconds === null || ride.movingTimeSeconds === undefined
+      ? durationSeconds
+      : optionalNumber(ride.movingTimeSeconds, `${prefix}.movingTimeSeconds`, 0, 172800);
 
     const points = ride.routePoints ?? [];
     if (!Array.isArray(points) || points.length > 20000) {
@@ -166,6 +169,8 @@ function normalizeSamsungSync(body) {
       duration_seconds: durationSeconds,
       elapsed_seconds: elapsedSeconds,
       elapsed_time: durationText(elapsedSeconds),
+      moving_time: durationText(movingTimeSeconds),
+      device_name: optionalText(ride.deviceName, `${prefix}.deviceName`, 100) ?? "Watch",
       distance_meters: optionalNumber(ride.distanceMeters, `${prefix}.distanceMeters`, 0, 2000000),
       elevation_gain_meters: optionalNumber(ride.elevationGainMeters, `${prefix}.elevationGainMeters`, 0, 100000),
       calories_kcal: optionalNumber(ride.caloriesKcal, `${prefix}.caloriesKcal`, 0, 100000),
@@ -173,7 +178,7 @@ function normalizeSamsungSync(body) {
       max_speed_meters_per_second: optionalNumber(ride.maxSpeedMetersPerSecond, `${prefix}.maxSpeedMetersPerSecond`, 0, 100),
       mean_heart_rate_bpm: optionalNumber(ride.meanHeartRateBpm, `${prefix}.meanHeartRateBpm`, 0, 300),
       max_heart_rate_bpm: optionalNumber(ride.maxHeartRateBpm, `${prefix}.maxHeartRateBpm`, 0, 300),
-      bike_name: optionalText(ride.bikeName, `${prefix}.bikeName`, 200),
+      bike_name: optionalText(ride.bikeName, `${prefix}.bikeName`, 200) ?? "Fuji",
       route_points: routePoints
     };
   });
@@ -301,6 +306,8 @@ app.post("/api/sync/samsung", async (req, res) => {
             duration_seconds numeric,
             elapsed_seconds numeric,
             elapsed_time text,
+            moving_time text,
+            device_name text,
             distance_meters double precision,
             elevation_gain_meters double precision,
             calories_kcal double precision,
@@ -322,12 +329,12 @@ app.post("/api/sync/samsung", async (req, res) => {
           (incoming.start_time AT TIME ZONE ${sync.timezone})::date,
           (incoming.start_time AT TIME ZONE ${sync.timezone})::time,
           incoming.elapsed_time,
-          '',
+          incoming.moving_time,
           incoming.distance_meters / 1000.0,
           incoming.elevation_gain_meters,
           incoming.mean_speed_meters_per_second * 3.6,
           incoming.max_speed_meters_per_second * 3.6,
-          'Samsung Health',
+          incoming.device_name,
           incoming.max_heart_rate_bpm,
           incoming.mean_heart_rate_bpm,
           incoming.bike_name,
@@ -345,6 +352,7 @@ app.post("/api/sync/samsung", async (req, res) => {
           ride_date = EXCLUDED.ride_date,
           start_time = EXCLUDED.start_time,
           elapsed_time = EXCLUDED.elapsed_time,
+          moving_time = EXCLUDED.moving_time,
           distance = EXCLUDED.distance,
           elevation = EXCLUDED.elevation,
           avg_speed = EXCLUDED.avg_speed,

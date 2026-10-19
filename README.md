@@ -42,7 +42,7 @@ LIMIT 20;
 
 The Android app in **android/** reads Samsung Health cycling sessions, previews them, and uploads selected date ranges to the server-side API. The API writes summaries to `rides` and ordered GPS samples to `ride_route_points` in Neon. Existing Strava rows remain intact. Samsung source IDs make uploads idempotent: retrying a batch updates the same ride rather than adding a duplicate. If route permission is declined, summaries still sync; a later sync with route access fills in the route.
 
-Samsung supplies moving time as unavailable, so it remains blank. The app does not infer missing metrics. Recorded GPS points are stored exactly in Neon. The dashboard currently displays the ride summaries; route points are not exposed by a public route endpoint yet.
+Samsung provides a session duration plus start and end timestamps, but no separate moving-time field. RideScope uses the start/end difference for `Elapsed_Time` and Samsung's session duration for `Moving_Time`. Synced Samsung sessions are labeled `Device = Watch` and `Bike = Fuji`; distance is stored in kilometres, elevation in metres, and speeds in kilometres per hour. Heart-rate fields use Samsung's mean and maximum values. Missing Samsung metrics remain unavailable. Recorded GPS points are stored exactly in Neon. The dashboard currently displays the ride summaries; route points are not exposed by a public route endpoint yet.
 
 ### Configure and run the Android app
 

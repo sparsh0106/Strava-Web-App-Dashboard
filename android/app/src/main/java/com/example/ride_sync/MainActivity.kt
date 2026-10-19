@@ -69,6 +69,8 @@ import javax.crypto.spec.GCMParameterSpec
 private const val SYNC_URL = "https://sparshrides.vercel.app/api/sync/samsung"
 private const val RIDES_PER_UPLOAD = 20
 private const val ROUTE_POINTS_PER_UPLOAD = 50_000
+private const val DEVICE_NAME = "Watch"
+private const val BIKE_NAME = "Fuji"
 
 private data class RoutePoint(
     val timestamp: Instant,
@@ -391,7 +393,7 @@ class MainActivity : ComponentActivity() {
             maxSpeedMetersPerSecond = finiteDouble(session.maxSpeed),
             meanHeartRateBpm = finiteDouble(session.meanHeartRate),
             maxHeartRateBpm = finiteDouble(session.maxHeartRate),
-            bikeName = null,
+            bikeName = BIKE_NAME,
             routePoints = routePoints
         )
     }
@@ -469,7 +471,8 @@ class MainActivity : ComponentActivity() {
                     put("endTime", ride.endTime.toString())
                     put("durationSeconds", ride.durationSeconds)
                     put("elapsedSeconds", ride.elapsedSeconds)
-                    put("movingTimeSeconds", JSONObject.NULL)
+                    put("movingTimeSeconds", ride.durationSeconds)
+                    put("deviceName", DEVICE_NAME)
                     putNullable(this, "distanceMeters", ride.distanceMeters)
                     putNullable(this, "elevationGainMeters", ride.elevationGainMeters)
                     putNullable(this, "caloriesKcal", ride.caloriesKcal)
