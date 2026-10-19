@@ -46,7 +46,7 @@ Samsung supplies moving time as unavailable, so it remains blank. The app does n
 
 ### Configure and run the Android app
 
-1. Open **android/** in Android Studio and sync Gradle. The project uses the Samsung Health Data SDK AAR at **android/app/libs/**; the licensed AAR is ignored by Git. If the local copy is missing, download the SDK from [Samsung Developer](https://developer.samsung.com/health/data/overview.html), accept its terms, and copy the API AAR into that folder.
+1. Open **android/** in Android Studio and sync Gradle. The project uses the Samsung Health Data SDK AAR at **android/app/libs/** and includes its Kotlin Parcelize and Gson runtime dependencies; the licensed AAR is ignored by Git. If the local copy is missing, download the SDK from [Samsung Developer](https://developer.samsung.com/health/data/overview.html), accept its terms, and copy the API AAR into that folder.
 2. Use a physical Android 10+ Samsung phone with Samsung Health 6.30.2 or later. Samsung Health Data SDK does not support emulators. Enable **Developer Mode (Samsung Health Data SDK) → Data Read** in Samsung Health; see Samsung's [developer mode guide](https://developer.samsung.com/health/data/guide/developer-mode.html).
 3. In the Vercel project, add `SYNC_TOKEN` to the Production environment. Use a long random value and keep it private. The server also needs its existing `DATABASE_URL` Neon integration.
 4. Run `npm run db:migrate-samsung` once against the same Neon database configured for Vercel, with `DATABASE_URL` set in `.env.local`. It adds source metadata and the route-points table without deleting existing rides. If you prefer Neon SQL Editor, run [`db/schema.sql`](db/schema.sql) there.
