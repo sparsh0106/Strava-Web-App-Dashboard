@@ -88,12 +88,12 @@ class MainActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text("RideScope Sync", style = MaterialTheme.typography.headlineMedium)
-                        Text("New Samsung Health cycling rides sync to RideScope automatically.")
+                        Text("Manually recorded Samsung Health cycling rides sync to RideScope automatically.")
 
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("BACKGROUND SYNC", style = MaterialTheme.typography.labelLarge)
-                                Text("When enabled, RideScope checks Samsung Health about every 15 minutes and uploads new rides only. Android may delay background checks to save battery.")
+                                Text("When enabled, RideScope checks Samsung Health about every 15 minutes and uploads new manual rides only. Auto-detected workouts are skipped. Android may delay background checks to save battery.")
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -118,7 +118,7 @@ class MainActivity : ComponentActivity() {
                                                 status = "Checking existing rides so only future additions sync…"
                                                 lifecycleScope.launch {
                                                     try {
-                                                        if (!AutoSyncState.hasBaseline(context)) {
+                                                        if (!AutoSyncState.hasBaseline(context) || AutoSyncState.needsManualOnlyBaselineRefresh(context)) {
                                                             val today = LocalDate.now()
                                                             val existing = SamsungRideSyncEngine.readCyclingRides(
                                                                 context,
@@ -188,16 +188,19 @@ class MainActivity : ComponentActivity() {
                                                 today,
                                                 this@MainActivity
                                             )
+                                            if (AutoSyncState.needsManualOnlyBaselineRefresh(context)) {
+                                                AutoSyncState.establishBaseline(context, recentRides)
+                                            }
                                             AutoSyncState.recoverTodayFromLegacyBaseline(context)
                                             rides = AutoSyncState.unseenRides(context, recentRides)
                                             if (rides.isEmpty()) {
-                                                status = "Checked ${recentRides.size} recent rides · no new rides found."
+                                                status = "Checked ${recentRides.count { it.autoDetected != true }} manual rides · ignored ${recentRides.count { it.autoDetected == true }} auto-detected rides · no new rides found."
                                             } else {
                                                 val result = withContext(Dispatchers.IO) {
                                                     SamsungRideSyncEngine.sync(syncToken.trim(), rides)
                                                 }
                                                 AutoSyncState.markSynced(context, rides)
-                                                status = "${result.rides} new rides synced · ${result.routePoints} GPS points saved to Neon."
+                                                status = "${result.rides} new manual rides synced · ignored ${recentRides.count { it.autoDetected == true }} auto-detected rides · ${result.routePoints} GPS points saved to Neon."
                                             }
                                             AutoSyncState.setStatus(context, status)
                                         } catch (error: Exception) {
@@ -235,14 +238,17 @@ class MainActivity : ComponentActivity() {
                                             if (history.isEmpty()) {
                                                 status = "No previous cycling rides were found in Samsung Health."
                                             } else {
-                                                status = "Checking ${history.size} Samsung sessions against RideScope and attaching available GPS routes… Summary data will not be uploaded."
+                                                status = "Checking ${history.size} Samsung sessions against RideScope. Auto-detected sessions will be excluded, and only manual rides can attach GPS routes… Summary data will not be uploaded."
                                                 val result = withContext(Dispatchers.IO) {
                                                     SamsungRideSyncEngine.syncRoutes(syncToken.trim(), history)
                                                 }
                                                 val handledIds = result.linkedSourceRecordIds + result.existingRouteSourceRecordIds
                                                 AutoSyncState.markSynced(context, history.filter { it.sourceRecordId in handledIds })
-                                                rides = history.take(30)
+                                                rides = history.filterNot { it.autoDetected == true }.take(30)
                                                 status = "GPS-only cleanup complete · ${result.linkedSourceRecordIds.size} Samsung sessions matched, ${result.routePoints} GPS points saved, ${result.existingRouteSourceRecordIds.size} already had routes, ${result.unmatchedSourceRecordIds.size} had no safe match, and ${result.ambiguousSourceRecordIds.size} were ambiguous. Matched duplicate rows are hidden on RideScope; ride summaries were left unchanged."
+                                                if (result.autoDetectedSourceRecordIds.isNotEmpty()) {
+                                                    status += " ${result.autoDetectedSourceRecordIds.size} auto-detected sessions were excluded; matching Samsung summary rows were hidden."
+                                                }
                                             }
                                             AutoSyncState.setStatus(context, status)
                                         } catch (error: Exception) {
@@ -260,14 +266,14 @@ class MainActivity : ComponentActivity() {
                         ) { Text(if (working) "Syncing GPS routes…" else "Sync previous GPS routes only") }
 
                         Text(
-                            "GPS-only history cleanup: matches Samsung sessions to existing RideScope rides using start time and distance, including sessions with no GPS. It can hide duplicate Samsung rows and saves GPS points when available. It never creates rides or changes distance, speed, heart rate, or other summary fields. Unmatched or ambiguous sessions are skipped.",
+                            "GPS-only history cleanup: matches manually recorded Samsung sessions to existing RideScope rides by start time and distance, including sessions with no GPS. Auto-detected sessions are excluded; any matching Samsung summary rows already in RideScope are hidden. It never creates rides or changes distance, speed, heart rate, or other summary fields. Unmatched or ambiguous sessions are skipped.",
                             style = MaterialTheme.typography.bodySmall
                         )
 
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("PRIVATE UPLOAD", style = MaterialTheme.typography.labelLarge)
-                                Text("Your sync token is encrypted on this phone. Automatic sync uploads summaries for new rides. Historical route sync attaches GPS points to existing rides without replacing their summary data.")
+                                Text("Your sync token is encrypted on this phone. Automatic sync uploads manually recorded rides only. Auto-detected workouts are excluded from summaries and GPS routes. Historical route sync attaches GPS points to existing rides without replacing their summary data.")
                             }
                         }
 

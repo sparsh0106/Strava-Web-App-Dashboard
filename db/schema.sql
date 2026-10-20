@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS rides (
   hr_mean numeric(8, 2),
   bike text,
   source_system text NOT NULL DEFAULT 'manual',
+  auto_detected boolean NOT NULL DEFAULT false,
   source_record_id text,
   source_fingerprint text,
   activity_type text,
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS rides (
 );
 
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_system text NOT NULL DEFAULT 'manual';
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS auto_detected boolean NOT NULL DEFAULT false;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_record_id text;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_fingerprint text;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS activity_type text;

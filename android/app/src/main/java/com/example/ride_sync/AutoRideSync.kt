@@ -26,6 +26,8 @@ internal object AutoSyncState {
     private const val PREFS = "ridescope_auto_sync"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_BASELINE_DONE = "baseline_done"
+    private const val KEY_BASELINE_VERSION = "baseline_version"
+    private const val MANUAL_ONLY_BASELINE_VERSION = 2
     private const val KEY_TODAY_BASELINE_RECOVERY_DONE = "today_baseline_recovery_done"
     private const val KEY_KNOWN_RIDES = "known_rides"
     private const val KEY_STATUS = "last_status"
@@ -58,6 +60,9 @@ internal object AutoSyncState {
 
     fun hasBaseline(context: Context): Boolean = preferences(context).getBoolean(KEY_BASELINE_DONE, false)
 
+    fun needsManualOnlyBaselineRefresh(context: Context): Boolean =
+        preferences(context).getInt(KEY_BASELINE_VERSION, 0) < MANUAL_ONLY_BASELINE_VERSION
+
     fun lastStatus(context: Context): String = preferences(context).getString(KEY_STATUS, "").orEmpty()
 
     fun setStatus(context: Context, status: String) {
@@ -70,10 +75,14 @@ internal object AutoSyncState {
         val today = LocalDate.now()
         writeKnownRides(
             context,
-            rides.filter { it.startTime.atZone(java.time.ZoneId.systemDefault()).toLocalDate().isBefore(today) }
+            rides.filterNot { it.autoDetected == true }
+                .filter { it.startTime.atZone(java.time.ZoneId.systemDefault()).toLocalDate().isBefore(today) }
                 .map(::identity)
         )
-        preferences(context).edit().putBoolean(KEY_BASELINE_DONE, true).apply()
+        preferences(context).edit()
+            .putBoolean(KEY_BASELINE_DONE, true)
+            .putInt(KEY_BASELINE_VERSION, MANUAL_ONLY_BASELINE_VERSION)
+            .apply()
     }
 
     fun recoverTodayFromLegacyBaseline(context: Context) {
@@ -97,7 +106,8 @@ internal object AutoSyncState {
 
     fun unseenRides(context: Context, rides: List<RideRecord>): List<RideRecord> {
         val known = readKnownRides(context)
-        return rides.filter { ride -> known.none { it.matches(ride) } }
+        return rides.filterNot { it.autoDetected == true }
+            .filter { ride -> known.none { it.matches(ride) } }
     }
 
     fun markSynced(context: Context, rides: List<RideRecord>) {
@@ -217,11 +227,14 @@ class SamsungRideSyncWorker(context: Context, params: WorkerParameters) : Corout
                 today.minusDays(AUTO_SYNC_LOOKBACK_DAYS),
                 today
             )
+            if (AutoSyncState.needsManualOnlyBaselineRefresh(applicationContext)) {
+                AutoSyncState.establishBaseline(applicationContext, rides)
+            }
             val newRides = AutoSyncState.unseenRides(applicationContext, rides)
             if (newRides.isEmpty()) {
                 AutoSyncState.setStatus(
                     applicationContext,
-                    "Automatic sync is on · checked ${rides.size} rides · no new rides found."
+                    "Automatic sync is on · checked ${rides.count { it.autoDetected != true }} manual rides · ignored ${rides.count { it.autoDetected == true }} auto-detected rides · no new rides found."
                 )
                 Result.success()
             } else {
@@ -231,7 +244,7 @@ class SamsungRideSyncWorker(context: Context, params: WorkerParameters) : Corout
                 AutoSyncState.markSynced(applicationContext, newRides)
                 AutoSyncState.setStatus(
                     applicationContext,
-                    "Auto-synced ${result.rides} new rides · ${result.routePoints} GPS points."
+                    "Auto-synced ${result.rides} new manual rides · ignored ${rides.count { it.autoDetected == true }} auto-detected rides · ${result.routePoints} GPS points."
                 )
                 Result.success()
             }

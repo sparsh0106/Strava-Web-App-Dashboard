@@ -69,10 +69,14 @@ internal data class RideRecord(
     val exerciseSamples: List<ExerciseSample>,
     val replaceRoutePoints: Boolean = true,
     val replaceExerciseSamples: Boolean = true,
-    val sourceRecordIds: List<String> = listOf(sourceRecordId)
+    val sourceRecordIds: List<String> = listOf(sourceRecordId),
+    val autoDetected: Boolean? = null
 )
 
 internal fun RideRecord.isSameSessionAs(other: RideRecord): Boolean {
+    // Preserve auto-detected sessions as separate records so we can exclude and
+    // classify them without ever merging their metrics or GPS into a manual ride.
+    if ((autoDetected == true) != (other.autoDetected == true)) return false
     if (activityType != other.activityType) return false
     val startDifference = kotlin.math.abs(startTime.epochSecond - other.startTime.epochSecond)
     if (startDifference > 300) return false
@@ -140,6 +144,7 @@ internal data class RouteSyncResult(
     val unmatchedSourceRecordIds: Set<String>,
     val ambiguousSourceRecordIds: Set<String>,
     val existingRouteSourceRecordIds: Set<String>,
+    val autoDetectedSourceRecordIds: Set<String>,
     val routePoints: Int
 )
 
@@ -222,7 +227,9 @@ internal object SamsungRideSyncEngine {
     }
 
     fun sync(token: String, rides: List<RideRecord>): SyncResult {
-        val batches = uploadBatches(rides)
+        val uploadableRides = rides.filterNot { it.autoDetected == true }
+        if (uploadableRides.isEmpty()) return SyncResult(0, 0, 0)
+        val batches = uploadBatches(uploadableRides)
         var syncedRides = 0
         var syncedPoints = 0
         var syncedSamples = 0
@@ -240,12 +247,17 @@ internal object SamsungRideSyncEngine {
         // Include route-less sessions too: they can be duplicate Samsung summary
         // rows that must be linked to the original ride without writing metrics.
         val routeRides = rides.map {
-            it.copy(exerciseSamples = emptyList(), replaceExerciseSamples = false)
+            it.copy(
+                routePoints = if (it.autoDetected == true) emptyList() else it.routePoints,
+                exerciseSamples = emptyList(),
+                replaceExerciseSamples = false
+            )
         }
         val linked = linkedSetOf<String>()
         val unmatched = linkedSetOf<String>()
         val ambiguous = linkedSetOf<String>()
         val existingRoute = linkedSetOf<String>()
+        val autoDetected = linkedSetOf<String>()
         var syncedPoints = 0
 
         uploadBatches(routeRides).forEach { batch ->
@@ -257,10 +269,11 @@ internal object SamsungRideSyncEngine {
                     "unmatched" -> unmatched.add(sourceRecordId)
                     "ambiguous" -> ambiguous.add(sourceRecordId)
                     "existing_route" -> existingRoute.add(sourceRecordId)
+                    "auto_detected" -> autoDetected.add(sourceRecordId)
                 }
             }
         }
-        return RouteSyncResult(linked, unmatched, ambiguous, existingRoute, syncedPoints)
+        return RouteSyncResult(linked, unmatched, ambiguous, existingRoute, autoDetected, syncedPoints)
     }
 
     private fun ExerciseSession.toRide(recordId: String, index: Int, includeRoute: Boolean): RideRecord {
@@ -298,7 +311,8 @@ internal object SamsungRideSyncEngine {
             bikeName = BIKE_NAME,
             routePoints = routePoints,
             exerciseSamples = samples,
-            sourceRecordIds = listOf("$recordId/session/$index")
+            sourceRecordIds = listOf("$recordId/session/$index"),
+            autoDetected = this.autoDetected
         )
     }
 
@@ -456,6 +470,7 @@ internal object SamsungRideSyncEngine {
             records.forEach { ride ->
                 put(JSONObject().apply {
                     put("sourceRecordId", ride.sourceRecordId)
+                    putNullable(this, "autoDetected", ride.autoDetected)
                     put("fingerprint", ride.fingerprint)
                     put("activityType", ride.activityType)
                     putNullable(this, "title", ride.title)
@@ -512,13 +527,14 @@ internal object SamsungRideSyncEngine {
                 put(JSONObject().apply {
                     put("sourceRecordId", ride.sourceRecordId)
                     put("sourceRecordIds", JSONArray(ride.sourceRecordIds))
+                    putNullable(this, "autoDetected", ride.autoDetected)
                     put("startTime", ride.startTime.toString())
                     // Distance is used only to identify an existing database ride; the route-only
                     // endpoint never writes it or changes any ride summary fields.
                     putNullable(this, "distanceMeters", ride.distanceMeters)
                     put("replaceRoutePoints", ride.routePoints.isNotEmpty() && ride.replaceRoutePoints)
                     put("routePoints", JSONArray().apply {
-                        ride.routePoints.forEach { point ->
+                        (if (ride.autoDetected == true) emptyList() else ride.routePoints).forEach { point ->
                             put(JSONObject().apply {
                                 put("sequence", point.sequence)
                                 put("timestamp", point.timestamp.toString())

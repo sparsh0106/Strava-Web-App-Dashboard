@@ -30,6 +30,7 @@ await sql.transaction(tx => [
       hr_mean numeric(8, 2),
       bike text,
       source_system text NOT NULL DEFAULT 'manual',
+      auto_detected boolean NOT NULL DEFAULT false,
       source_record_id text,
       source_fingerprint text,
       activity_type text,
@@ -40,6 +41,7 @@ await sql.transaction(tx => [
     )
   `,
   tx`ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_system text NOT NULL DEFAULT 'manual'`,
+  tx`ALTER TABLE rides ADD COLUMN IF NOT EXISTS auto_detected boolean NOT NULL DEFAULT false`,
   tx`ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_record_id text`,
   tx`ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_fingerprint text`,
   tx`ALTER TABLE rides ADD COLUMN IF NOT EXISTS activity_type text`,

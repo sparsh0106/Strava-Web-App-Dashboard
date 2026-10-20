@@ -111,13 +111,16 @@ function validTimestamp(value, name) {
 
 async function ensureSamsungRouteLinks() {
   if (!samsungRouteLinksReady) {
-    samsungRouteLinksReady = sql`
-      CREATE TABLE IF NOT EXISTS samsung_route_links (
-        source_record_id text PRIMARY KEY,
-        ride_id bigint NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
-        created_at timestamptz NOT NULL DEFAULT now()
-      )
-    `.catch(error => {
+    samsungRouteLinksReady = sql.transaction(tx => [
+      tx`
+        CREATE TABLE IF NOT EXISTS samsung_route_links (
+          source_record_id text PRIMARY KEY,
+          ride_id bigint NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `,
+      tx`ALTER TABLE rides ADD COLUMN IF NOT EXISTS auto_detected boolean NOT NULL DEFAULT false`
+    ]).catch(error => {
       samsungRouteLinksReady = null;
       throw error;
     });
@@ -224,12 +227,16 @@ function normalizeSamsungSync(body) {
     if (sampleSequences.size !== exerciseSamples.length) throw new TypeError(`${prefix}.exerciseSamples contains duplicate sequence values.`);
     const replaceRoutePoints = ride.replaceRoutePoints === undefined ? true : ride.replaceRoutePoints;
     const replaceExerciseSamples = ride.replaceExerciseSamples === undefined ? true : ride.replaceExerciseSamples;
+    if (ride.autoDetected !== undefined && ride.autoDetected !== null && typeof ride.autoDetected !== "boolean") {
+      throw new TypeError(`${prefix}.autoDetected must be a boolean or null.`);
+    }
     if (typeof replaceRoutePoints !== "boolean" || typeof replaceExerciseSamples !== "boolean") {
       throw new TypeError(`${prefix} replacement flags must be boolean values.`);
     }
 
     return {
       source_record_id: sourceRecordId,
+      auto_detected: ride.autoDetected === true,
       source_fingerprint: requiredText(ride.fingerprint, `${prefix}.fingerprint`, 128),
       activity_type: requiredText(ride.activityType, `${prefix}.activityType`, 100),
       title: optionalText(ride.title, `${prefix}.title`, 500),
@@ -325,10 +332,21 @@ function normalizeSamsungRouteSync(body) {
       throw new TypeError(`${prefix}.routePoints contains duplicate sequence values.`);
     }
     const replaceRoutePoints = ride.replaceRoutePoints === undefined ? true : ride.replaceRoutePoints;
+    if (ride.autoDetected !== undefined && ride.autoDetected !== null && typeof ride.autoDetected !== "boolean") {
+      throw new TypeError(`${prefix}.autoDetected must be a boolean or null.`);
+    }
     if (typeof replaceRoutePoints !== "boolean") {
       throw new TypeError(`${prefix}.replaceRoutePoints must be a boolean value.`);
     }
-    return { source_record_id: sourceRecordId, source_record_ids: sourceRecordIds, start_time: startTime, distance_meters: distanceMeters, route_points: routePoints, replace_route_points: replaceRoutePoints };
+    return {
+      source_record_id: sourceRecordId,
+      source_record_ids: sourceRecordIds,
+      auto_detected: ride.autoDetected === true,
+      start_time: startTime,
+      distance_meters: distanceMeters,
+      route_points: routePoints,
+      replace_route_points: replaceRoutePoints
+    };
   });
   return { timezone, rides, routePointCount };
 }
@@ -368,7 +386,8 @@ app.get("/api/rides", async (_req, res) => {
         activity_type,
         title
       FROM rides AS ride
-      WHERE NOT (
+      WHERE ride.auto_detected IS NOT TRUE
+        AND NOT (
         ride.source_system = 'samsung_health'
         AND EXISTS (
           SELECT 1
@@ -439,7 +458,8 @@ app.get("/api/rides/:rideId/analysis", async (req, res) => {
 
   try {
     const rideId = req.params.rideId;
-    const [ride] = await sql`SELECT id, duration_seconds, calories_kcal, source_system, activity_type, title FROM rides WHERE id = ${rideId}`;
+    await ensureSamsungRouteLinks();
+    const [ride] = await sql`SELECT id, duration_seconds, calories_kcal, source_system, activity_type, title FROM rides WHERE id = ${rideId} AND auto_detected IS NOT TRUE`;
     if (!ride) return res.status(404).json({ ok: false, error: "Ride not found." });
     const [routePoints, exerciseSamples] = await Promise.all([
       sql`SELECT recorded_at, latitude, longitude, altitude_meters FROM ride_route_points WHERE ride_id = ${rideId} ORDER BY sequence ASC`,
@@ -491,7 +511,8 @@ app.get("/api/health", async (_req, res) => {
     const [result] = await sql`
       SELECT count(*)::int AS ride_count
       FROM rides AS ride
-      WHERE NOT (
+      WHERE ride.auto_detected IS NOT TRUE
+        AND NOT (
         ride.source_system = 'samsung_health'
         AND EXISTS (
           SELECT 1
@@ -539,6 +560,20 @@ app.post("/api/sync/samsung/routes", async (req, res) => {
 
   try {
     await ensureSamsungRouteLinks();
+    const autoDetectedSourceRecordIds = [...new Set(sync.rides
+      .filter(ride => ride.auto_detected)
+      .flatMap(ride => ride.source_record_ids))];
+    if (autoDetectedSourceRecordIds.length) {
+      const autoDetectedIdsJson = JSON.stringify(autoDetectedSourceRecordIds);
+      await sql`
+        UPDATE rides AS ride
+        SET auto_detected = true
+        FROM jsonb_array_elements_text(${autoDetectedIdsJson}::jsonb) AS source(source_record_id)
+        WHERE ride.source_system = 'samsung_health'
+          AND ride.source_record_id = source.source_record_id
+          AND ride.auto_detected IS NOT TRUE
+      `;
+    }
     const matchingInput = JSON.stringify(sync.rides.map(ride => ({
       source_record_id: ride.source_record_id,
       source_record_ids: ride.source_record_ids,
@@ -583,6 +618,7 @@ app.post("/api/sync/samsung/routes", async (req, res) => {
             ) AS has_route
           FROM rides AS ride
           WHERE incoming.distance_meters IS NOT NULL
+            AND ride.auto_detected IS NOT TRUE
             AND ride.distance IS NOT NULL
             AND abs(ride.distance - incoming.distance_meters / 1000.0)
               <= greatest(0.25, incoming.distance_meters / 1000.0 * 0.02)
@@ -630,6 +666,9 @@ app.post("/api/sync/samsung/routes", async (req, res) => {
     const ridesBySourceId = new Map(sync.rides.map(ride => [ride.source_record_id, ride]));
     const classified = matches.map(match => {
       const ride = ridesBySourceId.get(match.source_record_id);
+      if (ride.auto_detected) {
+        return { source_record_id: match.source_record_id, source_record_ids: ride.source_record_ids, ride_id: null, status: "auto_detected" };
+      }
       if (Number(match.linked_count ?? 0) > 1) {
         return { source_record_id: match.source_record_id, source_record_ids: ride.source_record_ids, ride_id: null, status: "ambiguous" };
       }
@@ -782,13 +821,39 @@ app.post("/api/sync/samsung", async (req, res) => {
     return res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Invalid sync payload." });
   }
 
-  const serialized = JSON.stringify(sync.rides);
   try {
+    const autoDetectedRides = sync.rides.filter(ride => ride.auto_detected);
+    const autoDetectedSourceRecordIds = autoDetectedRides.map(ride => ride.source_record_id);
+    if (autoDetectedSourceRecordIds.length) {
+      const autoDetectedIdsJson = JSON.stringify(autoDetectedSourceRecordIds);
+      await sql`
+        UPDATE rides AS ride
+        SET auto_detected = true
+        FROM jsonb_array_elements_text(${autoDetectedIdsJson}::jsonb) AS source(source_record_id)
+        WHERE ride.source_system = 'samsung_health'
+          AND ride.source_record_id = source.source_record_id
+          AND ride.auto_detected IS NOT TRUE
+      `;
+    }
+
+    const uploadableRides = sync.rides.filter(ride => !ride.auto_detected);
+    if (uploadableRides.length === 0) {
+      return res.json({
+        ok: true,
+        ridesSynced: 0,
+        routePointsSynced: 0,
+        exerciseSamplesSynced: 0,
+        autoDetectedSkipped: autoDetectedRides.length
+      });
+    }
+
+    const serialized = JSON.stringify(uploadableRides);
     const transaction = await sql.transaction(tx => [
       tx`
         WITH incoming AS (
           SELECT * FROM jsonb_to_recordset(${serialized}::jsonb) AS ride(
             source_record_id text,
+            auto_detected boolean,
             source_fingerprint text,
             activity_type text,
             title text,
@@ -814,7 +879,7 @@ app.post("/api/sync/samsung", async (req, res) => {
         INSERT INTO rides (
           ride_date, start_time, elapsed_time, moving_time, distance, elevation,
           avg_speed, max_speed, device, hr_max, hr_mean, bike, source_system,
-          source_record_id, source_fingerprint, activity_type, title, comment,
+          source_record_id, auto_detected, source_fingerprint, activity_type, title, comment,
           duration_seconds, calories_kcal
         )
         SELECT
@@ -832,6 +897,7 @@ app.post("/api/sync/samsung", async (req, res) => {
           incoming.bike_name,
           'samsung_health',
           incoming.source_record_id,
+          incoming.auto_detected,
           incoming.source_fingerprint,
           incoming.activity_type,
           incoming.title,
@@ -839,7 +905,8 @@ app.post("/api/sync/samsung", async (req, res) => {
           incoming.duration_seconds,
           incoming.calories_kcal
         FROM incoming
-        WHERE NOT EXISTS (
+        WHERE incoming.auto_detected IS NOT TRUE
+          AND NOT EXISTS (
           SELECT 1 FROM samsung_route_links AS route_link
           WHERE route_link.source_record_id = incoming.source_record_id
         )
@@ -857,6 +924,7 @@ app.post("/api/sync/samsung", async (req, res) => {
           hr_max = EXCLUDED.hr_max,
           hr_mean = EXCLUDED.hr_mean,
           bike = EXCLUDED.bike,
+          auto_detected = EXCLUDED.auto_detected,
           source_fingerprint = EXCLUDED.source_fingerprint,
           activity_type = EXCLUDED.activity_type,
           title = EXCLUDED.title,
@@ -963,8 +1031,9 @@ app.post("/api/sync/samsung", async (req, res) => {
     return res.json({
       ok: true,
       ridesSynced: transaction[0].length,
-      routePointsSynced: sync.routePointCount,
-      exerciseSamplesSynced: sync.exerciseSampleCount
+      routePointsSynced: uploadableRides.reduce((total, ride) => total + ride.route_points.length, 0),
+      exerciseSamplesSynced: uploadableRides.reduce((total, ride) => total + ride.exercise_samples.length, 0),
+      autoDetectedSkipped: autoDetectedRides.length
     });
   } catch (error) {
     console.error("Samsung ride sync failed:", error instanceof Error ? error.name : "Unknown error");
