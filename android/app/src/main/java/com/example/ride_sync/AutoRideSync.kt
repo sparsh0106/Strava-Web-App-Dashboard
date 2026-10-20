@@ -27,7 +27,7 @@ internal object AutoSyncState {
     private const val KEY_ENABLED = "enabled"
     private const val KEY_BASELINE_DONE = "baseline_done"
     private const val KEY_BASELINE_VERSION = "baseline_version"
-    private const val MANUAL_ONLY_BASELINE_VERSION = 2
+    private const val MANUAL_ONLY_BASELINE_VERSION = 3
     private const val KEY_TODAY_BASELINE_RECOVERY_DONE = "today_baseline_recovery_done"
     private const val KEY_KNOWN_RIDES = "known_rides"
     private const val KEY_STATUS = "last_status"
@@ -75,8 +75,7 @@ internal object AutoSyncState {
         val today = LocalDate.now()
         writeKnownRides(
             context,
-            rides.filterNot { it.autoDetected == true }
-                .filter { it.isOverMinimumDistance() }
+            rides.filter { it.isEligibleRide() }
                 .filter { it.startTime.atZone(java.time.ZoneId.systemDefault()).toLocalDate().isBefore(today) }
                 .map(::identity)
         )
@@ -107,8 +106,7 @@ internal object AutoSyncState {
 
     fun unseenRides(context: Context, rides: List<RideRecord>): List<RideRecord> {
         val known = readKnownRides(context)
-        return rides.filterNot { it.autoDetected == true }
-            .filter { it.isOverMinimumDistance() }
+        return rides.filter { it.isEligibleRide() }
             .filter { ride -> known.none { it.matches(ride) } }
     }
 
@@ -236,7 +234,7 @@ class SamsungRideSyncWorker(context: Context, params: WorkerParameters) : Corout
             if (newRides.isEmpty()) {
                 AutoSyncState.setStatus(
                     applicationContext,
-                    "Automatic sync is on · checked ${rides.count { it.autoDetected != true && it.isOverMinimumDistance() }} manual rides over 5 km · skipped ${rides.count { it.autoDetected != true && !it.isOverMinimumDistance() }} short or unknown-distance rides · ignored ${rides.count { it.autoDetected == true }} auto-detected rides · no new rides found."
+                    "Automatic sync is on · checked ${rides.count { it.isEligibleRide() }} Samsung-recorded rides over 5 km · skipped ${rides.count { it.isSamsungHealthOrigin() && it.autoDetected != true && !it.isOverMinimumDistance() }} short or unknown-distance rides · ignored ${rides.count { it.autoDetected == true }} auto-detected rides and ${rides.count { !it.isSamsungHealthOrigin() }} imported or unverified sessions · no new rides found."
                 )
                 Result.success()
             } else {
@@ -246,7 +244,7 @@ class SamsungRideSyncWorker(context: Context, params: WorkerParameters) : Corout
                 AutoSyncState.markSynced(applicationContext, newRides)
                 AutoSyncState.setStatus(
                     applicationContext,
-                    "Auto-synced ${result.rides} new manual rides over 5 km · skipped ${rides.count { it.autoDetected != true && !it.isOverMinimumDistance() }} short or unknown-distance rides · ignored ${rides.count { it.autoDetected == true }} auto-detected rides · ${result.routePoints} GPS points."
+                    "Auto-synced ${result.rides} Samsung-recorded rides over 5 km · skipped ${rides.count { it.isSamsungHealthOrigin() && it.autoDetected != true && !it.isOverMinimumDistance() }} short or unknown-distance rides · ignored ${rides.count { it.autoDetected == true }} auto-detected rides and ${rides.count { !it.isSamsungHealthOrigin() }} imported or unverified sessions · ${result.routePoints} GPS points."
                 )
                 Result.success()
             }

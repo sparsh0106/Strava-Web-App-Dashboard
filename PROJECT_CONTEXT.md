@@ -19,8 +19,9 @@ The API, health count, private analysis endpoint, CSV import, Samsung summary up
 - `src/types.ts` defines the shared ride and analytics types.
 - `src/styles.css` contains the visual system, components, responsive layout, and motion preferences.
 - `index.html` loads Google Sans from Google Fonts.
-- Samsung Health copies are linked through `samsung_route_links`; the API hides only source rows mapped to a different canonical ride, preserving legitimate rides and all summary fields.
-- Samsung sessions marked auto-detected are never uploaded or GPS-matched; previously imported Samsung summaries are classified and hidden from public ride data without deleting the rows.
+- Samsung Health copies are linked through `samsung_route_links`; the API hides source rows mapped to a different canonical ride, preserving the canonical summary fields.
+- Samsung sessions are eligible only when their SDK `dataSource.appId` is `com.sec.android.app.shealth`, they are not auto-detected, and their distance exceeds 5 km. Imported Strava activities and unknown-source sessions are excluded, preventing a planned GPX total from being counted with real segmented watch rides.
+- `rides.source_app_id`, `samsung_route_links.source_app_id`, and route/sample `source_record_id` preserve source provenance. Historical source IDs without verified provenance are hidden from dashboard and private route analysis until the Android app refreshes their metadata.
 
 ## Data model
 

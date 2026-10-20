@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS rides (
   hr_mean numeric(8, 2),
   bike text,
   source_system text NOT NULL DEFAULT 'manual',
+  source_app_id text,
   auto_detected boolean NOT NULL DEFAULT false,
   source_record_id text,
   source_fingerprint text,
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS rides (
 );
 
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_system text NOT NULL DEFAULT 'manual';
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_app_id text;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS auto_detected boolean NOT NULL DEFAULT false;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_record_id text;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS source_fingerprint text;
@@ -40,6 +42,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS rides_source_record_idx
 
 CREATE TABLE IF NOT EXISTS ride_route_points (
   ride_id bigint NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+  source_record_id text,
   sequence integer NOT NULL CHECK (sequence >= 0),
   recorded_at timestamptz NOT NULL,
   latitude double precision NOT NULL CHECK (latitude BETWEEN -90 AND 90),
@@ -51,6 +54,7 @@ CREATE TABLE IF NOT EXISTS ride_route_points (
 -- Private per-second/per-sample exercise metrics used by individual ride analysis.
 CREATE TABLE IF NOT EXISTS ride_exercise_samples (
   ride_id bigint NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+  source_record_id text,
   sequence integer NOT NULL CHECK (sequence >= 0),
   recorded_at timestamptz NOT NULL,
   heart_rate_bpm numeric(8, 2),
@@ -65,8 +69,32 @@ CREATE TABLE IF NOT EXISTS ride_exercise_samples (
 CREATE TABLE IF NOT EXISTS samsung_route_links (
   source_record_id text PRIMARY KEY,
   ride_id bigint NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+  source_app_id text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS samsung_route_links_ride_id_idx
   ON samsung_route_links (ride_id);
+
+ALTER TABLE ride_route_points ADD COLUMN IF NOT EXISTS source_record_id text;
+ALTER TABLE ride_exercise_samples ADD COLUMN IF NOT EXISTS source_record_id text;
+ALTER TABLE samsung_route_links ADD COLUMN IF NOT EXISTS source_app_id text;
+
+WITH unique_route_links AS (
+  SELECT ride_id, min(source_record_id) AS source_record_id
+  FROM samsung_route_links
+  GROUP BY ride_id
+  HAVING count(*) = 1
+)
+UPDATE ride_route_points AS route
+SET source_record_id = link.source_record_id
+FROM unique_route_links AS link
+WHERE route.ride_id = link.ride_id
+  AND route.source_record_id IS NULL;
+
+UPDATE ride_exercise_samples AS sample
+SET source_record_id = ride.source_record_id
+FROM rides AS ride
+WHERE sample.ride_id = ride.id
+  AND ride.source_system = 'samsung_health'
+  AND sample.source_record_id IS NULL;

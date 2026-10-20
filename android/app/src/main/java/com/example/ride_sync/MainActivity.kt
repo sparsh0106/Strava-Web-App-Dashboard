@@ -194,13 +194,13 @@ class MainActivity : ComponentActivity() {
                                             AutoSyncState.recoverTodayFromLegacyBaseline(context)
                                             rides = AutoSyncState.unseenRides(context, recentRides)
                                             if (rides.isEmpty()) {
-                                                status = "Checked ${recentRides.count { it.autoDetected != true && it.isOverMinimumDistance() }} manual rides over 5 km · skipped ${recentRides.count { it.autoDetected != true && !it.isOverMinimumDistance() }} short or unknown-distance rides · ignored ${recentRides.count { it.autoDetected == true }} auto-detected rides · no new rides found."
+                                                status = "Checked ${recentRides.count { it.isEligibleRide() }} Samsung-recorded rides over 5 km · skipped ${recentRides.count { it.isSamsungHealthOrigin() && it.autoDetected != true && !it.isOverMinimumDistance() }} short or unknown-distance rides · ignored ${recentRides.count { it.autoDetected == true }} auto-detected rides and ${recentRides.count { !it.isSamsungHealthOrigin() }} imported or unverified sessions · no new rides found."
                                             } else {
                                                 val result = withContext(Dispatchers.IO) {
                                                     SamsungRideSyncEngine.sync(syncToken.trim(), rides)
                                                 }
                                                 AutoSyncState.markSynced(context, rides)
-                                                status = "${result.rides} new manual rides over 5 km synced · skipped ${recentRides.count { it.autoDetected != true && !it.isOverMinimumDistance() }} short or unknown-distance rides · ignored ${recentRides.count { it.autoDetected == true }} auto-detected rides · ${result.routePoints} GPS points saved to Neon."
+                                                status = "${result.rides} new Samsung-recorded rides over 5 km synced · skipped ${recentRides.count { it.isSamsungHealthOrigin() && it.autoDetected != true && !it.isOverMinimumDistance() }} short or unknown-distance rides · ignored ${recentRides.count { it.autoDetected == true }} auto-detected rides and ${recentRides.count { !it.isSamsungHealthOrigin() }} imported or unverified sessions · ${result.routePoints} GPS points saved to Neon."
                                             }
                                             AutoSyncState.setStatus(context, status)
                                         } catch (error: Exception) {
@@ -238,14 +238,14 @@ class MainActivity : ComponentActivity() {
                                             if (history.isEmpty()) {
                                                 status = "No previous cycling rides were found in Samsung Health."
                                             } else {
-                                                status = "Checking ${history.size} Samsung sessions against RideScope. Auto-detected sessions will be excluded, and only manual rides can attach GPS routes… Summary data will not be uploaded."
+                                                status = "Checking ${history.size} Samsung sessions against RideScope. Only Samsung Health recorded sessions can attach GPS routes; Strava imports and other unverified sources are excluded… Summary data will not be uploaded."
                                                 val result = withContext(Dispatchers.IO) {
                                                     SamsungRideSyncEngine.syncRoutes(syncToken.trim(), history)
                                                 }
                                                 val handledIds = result.linkedSourceRecordIds + result.existingRouteSourceRecordIds
                                                 AutoSyncState.markSynced(context, history.filter { it.sourceRecordId in handledIds })
-                                                rides = history.filter { it.autoDetected != true && it.isOverMinimumDistance() }.take(30)
-                                                status = "GPS-only cleanup complete · ${result.linkedSourceRecordIds.size} Samsung sessions matched, ${result.routePoints} GPS points saved, ${result.existingRouteSourceRecordIds.size} already had routes, ${result.unmatchedSourceRecordIds.size} had no safe match, and ${result.ambiguousSourceRecordIds.size} were ambiguous. Matched duplicate rows are hidden on RideScope; ride summaries were left unchanged."
+                                                rides = history.filter { it.isEligibleRide() }.take(30)
+                                                status = "GPS-only cleanup complete · ${result.linkedSourceRecordIds.size} Samsung-recorded sessions matched, ${result.routePoints} GPS points saved, ${result.existingRouteSourceRecordIds.size} already had routes, ${result.unmatchedSourceRecordIds.size} had no safe match, ${result.ambiguousSourceRecordIds.size} were ambiguous, and ${result.nonSamsungSourceRecordIds.size} imported or unverified sessions were excluded. Matched duplicate rows are hidden on RideScope; ride summaries were left unchanged."
                                                 if (result.autoDetectedSourceRecordIds.isNotEmpty()) {
                                                     status += " ${result.autoDetectedSourceRecordIds.size} auto-detected sessions were excluded; matching Samsung summary rows were hidden."
                                                 }
@@ -266,7 +266,7 @@ class MainActivity : ComponentActivity() {
                         ) { Text(if (working) "Syncing GPS routes…" else "Sync previous GPS routes only") }
 
                         Text(
-                            "GPS-only history cleanup: matches manually recorded Samsung sessions over 5 km to existing RideScope rides by start time and distance, including sessions with no GPS. Sessions at or below 5 km, or with no distance, are skipped. Auto-detected sessions are excluded; any matching Samsung summary rows already in RideScope are hidden. It never creates rides or changes summary fields. Unmatched or ambiguous sessions are skipped.",
+                            "GPS-only history cleanup: matches Samsung Health recorded sessions over 5 km to existing RideScope rides by start time and distance, including sessions with no GPS. Sessions at or below 5 km, auto-detected sessions, and activities imported from Strava or another app are excluded. It never creates rides or changes summary fields. Unmatched or ambiguous sessions are skipped.",
                             style = MaterialTheme.typography.bodySmall
                         )
 
