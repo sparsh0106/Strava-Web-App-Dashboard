@@ -68,18 +68,20 @@ internal data class RideRecord(
     val routePoints: List<RoutePoint>,
     val exerciseSamples: List<ExerciseSample>,
     val replaceRoutePoints: Boolean = true,
-    val replaceExerciseSamples: Boolean = true
+    val replaceExerciseSamples: Boolean = true,
+    val sourceRecordIds: List<String> = listOf(sourceRecordId)
 )
 
 internal fun RideRecord.isSameSessionAs(other: RideRecord): Boolean {
     if (activityType != other.activityType) return false
     val startDifference = kotlin.math.abs(startTime.epochSecond - other.startTime.epochSecond)
-    if (startDifference > 120) return false
+    if (startDifference > 300) return false
+    if (kotlin.math.abs(endTime.epochSecond - other.endTime.epochSecond) > 300) return false
 
     val thisDistance = distanceMeters
     val otherDistance = other.distanceMeters
     if (thisDistance != null && otherDistance != null) {
-        val toleranceMeters = maxOf(25.0, maxOf(thisDistance, otherDistance) * 0.001)
+        val toleranceMeters = maxOf(25.0, maxOf(thisDistance, otherDistance) * 0.01)
         return kotlin.math.abs(thisDistance - otherDistance) <= toleranceMeters
     }
     return fingerprint == other.fingerprint
@@ -104,17 +106,18 @@ internal fun RideRecord.mergeDuplicate(other: RideRecord): RideRecord {
             .thenBy { it.fingerprint }
     )
     val fallback = if (preferred === this) other else this
-    val mergedRoute = (routePoints + other.routePoints)
-        .distinctBy { Triple(it.timestamp, it.latitude, it.longitude) }
+    val routeSource = if (routePoints.size >= other.routePoints.size) this else other
+    val sampleSource = if (exerciseSamples.size >= other.exerciseSamples.size) this else other
+    val mergedRoute = routeSource.routePoints
         .sortedBy { it.timestamp }
         .mapIndexed { index, point -> point.copy(sequence = index) }
-    val mergedSamples = (exerciseSamples + other.exerciseSamples)
-        .distinctBy { Triple(it.timestamp, it.heartRateBpm, it.speedMetersPerSecond) }
+    val mergedSamples = sampleSource.exerciseSamples
         .sortedBy { it.timestamp }
         .mapIndexed { index, sample -> sample.copy(sequence = index) }
 
     return preferred.copy(
         sourceRecordId = minOf(sourceRecordId, other.sourceRecordId),
+        sourceRecordIds = (sourceRecordIds + other.sourceRecordIds).distinct().sorted(),
         title = preferred.title ?: fallback.title,
         comment = preferred.comment ?: fallback.comment,
         distanceMeters = preferred.distanceMeters ?: fallback.distanceMeters,
@@ -234,7 +237,9 @@ internal object SamsungRideSyncEngine {
 
     /** Upload route geometry only, attaching it to a uniquely matched existing RideScope ride. */
     fun syncRoutes(token: String, rides: List<RideRecord>): RouteSyncResult {
-        val routeRides = rides.filter { it.routePoints.isNotEmpty() }.map {
+        // Include route-less sessions too: they can be duplicate Samsung summary
+        // rows that must be linked to the original ride without writing metrics.
+        val routeRides = rides.map {
             it.copy(exerciseSamples = emptyList(), replaceExerciseSamples = false)
         }
         val linked = linkedSetOf<String>()
@@ -292,7 +297,8 @@ internal object SamsungRideSyncEngine {
             maxHeartRateBpm = finiteDouble(this.maxHeartRate),
             bikeName = BIKE_NAME,
             routePoints = routePoints,
-            exerciseSamples = samples
+            exerciseSamples = samples,
+            sourceRecordIds = listOf("$recordId/session/$index")
         )
     }
 
@@ -479,7 +485,7 @@ internal object SamsungRideSyncEngine {
                             })
                         }
                     })
-                    put("replaceRoutePoints", ride.replaceRoutePoints)
+                    put("replaceRoutePoints", ride.routePoints.isNotEmpty() && ride.replaceRoutePoints)
                     put("replaceExerciseSamples", ride.replaceExerciseSamples)
                     put("exerciseSamples", JSONArray().apply {
                         ride.exerciseSamples.forEach { sample ->
@@ -505,11 +511,12 @@ internal object SamsungRideSyncEngine {
             records.forEach { ride ->
                 put(JSONObject().apply {
                     put("sourceRecordId", ride.sourceRecordId)
+                    put("sourceRecordIds", JSONArray(ride.sourceRecordIds))
                     put("startTime", ride.startTime.toString())
                     // Distance is used only to identify an existing database ride; the route-only
                     // endpoint never writes it or changes any ride summary fields.
                     putNullable(this, "distanceMeters", ride.distanceMeters)
-                    put("replaceRoutePoints", ride.replaceRoutePoints)
+                    put("replaceRoutePoints", ride.routePoints.isNotEmpty() && ride.replaceRoutePoints)
                     put("routePoints", JSONArray().apply {
                         ride.routePoints.forEach { point ->
                             put(JSONObject().apply {

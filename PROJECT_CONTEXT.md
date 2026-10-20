@@ -17,6 +17,7 @@ RideScope is a public cycling analytics dashboard for a Strava activity export s
 - `src/types.ts` defines the shared ride and analytics types.
 - `src/styles.css` contains the visual system, components, responsive layout, and motion preferences.
 - `index.html` loads Google Sans from Google Fonts.
+- Samsung Health copies are linked through `samsung_route_links`; the API hides only source rows mapped to a different canonical ride, preserving legitimate rides and all summary fields.
 
 ## Data model
 

@@ -284,13 +284,22 @@ function normalizeSamsungRouteSync(body) {
       throw new TypeError(`${prefix} must be an object.`);
     }
     const sourceRecordId = requiredText(ride.sourceRecordId, `${prefix}.sourceRecordId`, 255);
-    if (seenIds.has(sourceRecordId)) throw new TypeError(`Duplicate sourceRecordId in request: ${sourceRecordId}.`);
-    seenIds.add(sourceRecordId);
+    const rawSourceRecordIds = ride.sourceRecordIds === undefined ? [sourceRecordId] : ride.sourceRecordIds;
+    if (!Array.isArray(rawSourceRecordIds) || rawSourceRecordIds.length < 1 || rawSourceRecordIds.length > 25) {
+      throw new TypeError(`${prefix}.sourceRecordIds must contain between 1 and 25 session IDs.`);
+    }
+    const sourceRecordIds = [...new Set([sourceRecordId, ...rawSourceRecordIds.map((sourceId, sourceIndex) =>
+      requiredText(sourceId, `${prefix}.sourceRecordIds[${sourceIndex}]`, 255)
+    )])];
+    for (const sourceId of sourceRecordIds) {
+      if (seenIds.has(sourceId)) throw new TypeError(`Duplicate sourceRecordId in request: ${sourceId}.`);
+      seenIds.add(sourceId);
+    }
     const startTime = validTimestamp(ride.startTime, `${prefix}.startTime`);
     const distanceMeters = optionalNumber(ride.distanceMeters, `${prefix}.distanceMeters`, 0, 2000000);
     const rawPoints = ride.routePoints;
-    if (!Array.isArray(rawPoints) || rawPoints.length < 1 || rawPoints.length > 20000) {
-      throw new TypeError(`${prefix}.routePoints must contain between 1 and 20000 points.`);
+    if (!Array.isArray(rawPoints) || rawPoints.length > 20000) {
+      throw new TypeError(`${prefix}.routePoints must contain at most 20000 points.`);
     }
     routePointCount += rawPoints.length;
     if (routePointCount > 50000) throw new TypeError("Each GPS sync request is limited to 50000 route points.");
@@ -319,7 +328,7 @@ function normalizeSamsungRouteSync(body) {
     if (typeof replaceRoutePoints !== "boolean") {
       throw new TypeError(`${prefix}.replaceRoutePoints must be a boolean value.`);
     }
-    return { source_record_id: sourceRecordId, start_time: startTime, distance_meters: distanceMeters, route_points: routePoints, replace_route_points: replaceRoutePoints };
+    return { source_record_id: sourceRecordId, source_record_ids: sourceRecordIds, start_time: startTime, distance_meters: distanceMeters, route_points: routePoints, replace_route_points: replaceRoutePoints };
   });
   return { timezone, rides, routePointCount };
 }
@@ -478,7 +487,20 @@ app.get("/api/health", async (_req, res) => {
   }
 
   try {
-    const [result] = await sql`SELECT count(*)::int AS ride_count FROM rides`;
+    await ensureSamsungRouteLinks();
+    const [result] = await sql`
+      SELECT count(*)::int AS ride_count
+      FROM rides AS ride
+      WHERE NOT (
+        ride.source_system = 'samsung_health'
+        AND EXISTS (
+          SELECT 1
+          FROM samsung_route_links AS route_link
+          WHERE route_link.source_record_id = ride.source_record_id
+            AND route_link.ride_id <> ride.id
+        )
+      )
+    `;
     return res.json({
       ok: true,
       databaseConfigured: true,
@@ -519,6 +541,7 @@ app.post("/api/sync/samsung/routes", async (req, res) => {
     await ensureSamsungRouteLinks();
     const matchingInput = JSON.stringify(sync.rides.map(ride => ({
       source_record_id: ride.source_record_id,
+      source_record_ids: ride.source_record_ids,
       start_time: ride.start_time,
       distance_meters: ride.distance_meters
     })));
@@ -526,24 +549,32 @@ app.post("/api/sync/samsung/routes", async (req, res) => {
       WITH incoming AS (
         SELECT * FROM jsonb_to_recordset(${matchingInput}::jsonb) AS ride(
           source_record_id text,
+          source_record_ids jsonb,
           start_time timestamptz,
           distance_meters double precision
         )
       )
       SELECT
         incoming.source_record_id,
+        linked.linked_count,
         linked.ride_id::text AS linked_ride_id,
         candidate.candidate_count,
         candidate.candidate_ride_id,
         candidate.has_existing_route
       FROM incoming
-      LEFT JOIN samsung_route_links AS linked
-        ON linked.source_record_id = incoming.source_record_id
+      LEFT JOIN LATERAL (
+        SELECT
+          count(DISTINCT route_link.ride_id)::int AS linked_count,
+          min(route_link.ride_id) AS ride_id
+        FROM jsonb_array_elements_text(incoming.source_record_ids) AS source(source_record_id)
+        JOIN samsung_route_links AS route_link USING (source_record_id)
+      ) AS linked ON true
       LEFT JOIN LATERAL (
         WITH candidate_rides AS (
           SELECT
             ride.id,
             ride.source_system,
+            ride.source_record_id,
             ride.ride_date,
             ride.distance,
             EXISTS (
@@ -581,22 +612,42 @@ app.post("/api/sync/samsung/routes", async (req, res) => {
             )
         )
         SELECT
-          count(*)::int AS candidate_count,
-          min(id)::text AS candidate_ride_id,
+          CASE
+            WHEN coalesce(bool_and(
+              source_system = 'samsung_health'
+              AND source_record_id IN (
+                SELECT jsonb_array_elements_text(incoming.source_record_ids)
+              )
+            ), false) AND count(*) > 0 THEN 1
+            ELSE count(*)::int
+          END AS candidate_count,
+          (array_agg(id ORDER BY has_route DESC, id))[1]::text AS candidate_ride_id,
           coalesce(bool_or(has_route), false) AS has_existing_route
         FROM preferred_rides
-      ) AS candidate ON linked.ride_id IS NULL
+      ) AS candidate ON linked.linked_count = 0
     `;
 
+    const ridesBySourceId = new Map(sync.rides.map(ride => [ride.source_record_id, ride]));
     const classified = matches.map(match => {
+      const ride = ridesBySourceId.get(match.source_record_id);
+      if (Number(match.linked_count ?? 0) > 1) {
+        return { source_record_id: match.source_record_id, source_record_ids: ride.source_record_ids, ride_id: null, status: "ambiguous" };
+      }
       if (match.linked_ride_id !== null) {
-        return { source_record_id: match.source_record_id, ride_id: String(match.linked_ride_id), status: "linked" };
+        return { source_record_id: match.source_record_id, source_record_ids: ride.source_record_ids, ride_id: String(match.linked_ride_id), status: "linked" };
       }
       const candidateCount = Number(match.candidate_count ?? 0);
-      if (candidateCount === 0) return { source_record_id: match.source_record_id, ride_id: null, status: "unmatched" };
-      if (candidateCount > 1) return { source_record_id: match.source_record_id, ride_id: null, status: "ambiguous" };
-      if (match.has_existing_route) return { source_record_id: match.source_record_id, ride_id: null, status: "existing_route" };
-      return { source_record_id: match.source_record_id, ride_id: String(match.candidate_ride_id), status: "matched" };
+      if (candidateCount === 0) return { source_record_id: match.source_record_id, source_record_ids: ride.source_record_ids, ride_id: null, status: "unmatched" };
+      if (candidateCount > 1) return { source_record_id: match.source_record_id, source_record_ids: ride.source_record_ids, ride_id: null, status: "ambiguous" };
+      if (match.has_existing_route) {
+        return {
+          source_record_id: match.source_record_id,
+          source_record_ids: ride.source_record_ids,
+          ride_id: String(match.candidate_ride_id),
+          status: "existing_route"
+        };
+      }
+      return { source_record_id: match.source_record_id, source_record_ids: ride.source_record_ids, ride_id: String(match.candidate_ride_id), status: "matched" };
     });
 
     // Never let two Samsung sessions overwrite points on the same RideScope row.
@@ -613,15 +664,17 @@ app.post("/api/sync/samsung/routes", async (req, res) => {
       });
     });
 
-    const ridesBySourceId = new Map(sync.rides.map(ride => [ride.source_record_id, ride]));
-    const accepted = classified
-      .filter(match => match.ride_id && (match.status === "linked" || match.status === "matched"))
+    const linkable = classified.filter(match => match.ride_id && ["linked", "matched", "existing_route"].includes(match.status));
+    const accepted = linkable
+      .filter(match => (match.status === "linked" || match.status === "matched")
+        && ridesBySourceId.get(match.source_record_id).route_points.length > 0)
       .map(match => ({ ...ridesBySourceId.get(match.source_record_id), ride_id: match.ride_id }));
-    const newLinks = accepted
-      .filter(ride => classified.some(match => match.source_record_id === ride.source_record_id && match.status === "matched"))
-      .map(ride => ({ source_record_id: ride.source_record_id, ride_id: ride.ride_id }));
+    const newLinks = linkable.flatMap(match => match.source_record_ids.map(sourceRecordId => ({
+      source_record_id: sourceRecordId,
+      ride_id: match.ride_id
+    })));
 
-    if (accepted.length) {
+    if (newLinks.length || accepted.length) {
       const linksJson = JSON.stringify(newLinks);
       const routesJson = JSON.stringify(accepted.map(ride => ({
         source_record_id: ride.source_record_id,
@@ -643,22 +696,24 @@ app.post("/api/sync/samsung/routes", async (req, res) => {
             ON CONFLICT (source_record_id) DO NOTHING
           `);
         }
-        if (accepted.some(ride => ride.replace_route_points)) {
+        if (accepted.some(ride => ride.replace_route_points && ride.route_points.length > 0)) {
           queries.push(tx`
             WITH incoming AS (
               SELECT * FROM jsonb_to_recordset(${routesJson}::jsonb) AS ride(
                 source_record_id text,
-                replace_route_points boolean
+                replace_route_points boolean,
+                route_points jsonb
               )
             )
             DELETE FROM ride_route_points AS route
             USING incoming, samsung_route_links AS link
             WHERE incoming.replace_route_points
+              AND jsonb_array_length(incoming.route_points) > 0
               AND link.source_record_id = incoming.source_record_id
               AND route.ride_id = link.ride_id
           `);
         }
-        queries.push(tx`
+        if (accepted.length) queries.push(tx`
           WITH incoming AS (
             SELECT * FROM jsonb_to_recordset(${routesJson}::jsonb) AS ride(
               source_record_id text,
@@ -698,7 +753,7 @@ app.post("/api/sync/samsung/routes", async (req, res) => {
     });
   } catch (error) {
     console.error("Samsung GPS-only sync failed:", error instanceof Error ? error.name : "Unknown error");
-    return res.status(500).json({ ok: false, error: "Could not attach Samsung GPS routes to existing rides. Retry the sync." });
+    return res.status(500).json({ ok: false, error: "Could not reconcile Samsung sessions and attach GPS routes. Retry the sync." });
   }
 });
 

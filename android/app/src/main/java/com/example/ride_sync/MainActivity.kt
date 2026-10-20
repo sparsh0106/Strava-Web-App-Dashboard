@@ -232,18 +232,17 @@ class MainActivity : ComponentActivity() {
                                                 today,
                                                 this@MainActivity
                                             )
-                                            val routeHistory = history.filter { it.routePoints.isNotEmpty() }
-                                            if (routeHistory.isEmpty()) {
-                                                status = "No previous cycling GPS routes were found in Samsung Health."
+                                            if (history.isEmpty()) {
+                                                status = "No previous cycling rides were found in Samsung Health."
                                             } else {
-                                                status = "Matching ${routeHistory.size} GPS routes to existing RideScope rides… Summary data will not be uploaded."
+                                                status = "Checking ${history.size} Samsung sessions against RideScope and attaching available GPS routes… Summary data will not be uploaded."
                                                 val result = withContext(Dispatchers.IO) {
-                                                    SamsungRideSyncEngine.syncRoutes(syncToken.trim(), routeHistory)
+                                                    SamsungRideSyncEngine.syncRoutes(syncToken.trim(), history)
                                                 }
                                                 val handledIds = result.linkedSourceRecordIds + result.existingRouteSourceRecordIds
                                                 AutoSyncState.markSynced(context, history.filter { it.sourceRecordId in handledIds })
                                                 rides = history.take(30)
-                                                status = "GPS-only backfill complete · ${result.linkedSourceRecordIds.size} routes attached, ${result.routePoints} GPS points saved. ${result.unmatchedSourceRecordIds.size} had no safe match, ${result.ambiguousSourceRecordIds.size} were ambiguous, and ${result.existingRouteSourceRecordIds.size} already had routes. Ride summaries were left unchanged."
+                                                status = "GPS-only cleanup complete · ${result.linkedSourceRecordIds.size} Samsung sessions matched, ${result.routePoints} GPS points saved, ${result.existingRouteSourceRecordIds.size} already had routes, ${result.unmatchedSourceRecordIds.size} had no safe match, and ${result.ambiguousSourceRecordIds.size} were ambiguous. Matched duplicate rows are hidden on RideScope; ride summaries were left unchanged."
                                             }
                                             AutoSyncState.setStatus(context, status)
                                         } catch (error: Exception) {
@@ -261,7 +260,7 @@ class MainActivity : ComponentActivity() {
                         ) { Text(if (working) "Syncing GPS routes…" else "Sync previous GPS routes only") }
 
                         Text(
-                            "One-time GPS-only backfill: matches Samsung routes to existing RideScope rides using start time and distance, then saves route points only. It does not create rides or change distance, speed, heart rate, or other summary fields. Unmatched or ambiguous routes are skipped.",
+                            "GPS-only history cleanup: matches Samsung sessions to existing RideScope rides using start time and distance, including sessions with no GPS. It can hide duplicate Samsung rows and saves GPS points when available. It never creates rides or changes distance, speed, heart rate, or other summary fields. Unmatched or ambiguous sessions are skipped.",
                             style = MaterialTheme.typography.bodySmall
                         )
 

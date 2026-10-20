@@ -58,8 +58,8 @@ CREATE TABLE IF NOT EXISTS ride_exercise_samples (
   PRIMARY KEY (ride_id, sequence)
 );
 
--- Links Samsung Health sessions to existing imported rides when only GPS
--- history is being backfilled. This does not change ride summary fields.
+-- Links Samsung Health sessions to their canonical RideScope rows during the
+-- GPS-only history reconciliation. This does not change ride summary fields.
 CREATE TABLE IF NOT EXISTS samsung_route_links (
   source_record_id text PRIMARY KEY,
   ride_id bigint NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
