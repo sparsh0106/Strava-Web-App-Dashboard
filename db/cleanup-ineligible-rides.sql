@@ -1,6 +1,6 @@
--- Reversible cleanup of Samsung-import noise and the short rides excluded by RideScope.
--- Run only after taking a Neon restore point and confirming the current candidate counts.
--- The archive tables are private: no application endpoint reads them.
+-- Archive Samsung-import noise and rides missing distance or at/below 5 km.
+-- Every affected row is archived before deletion; failed archive checks roll back the transaction.
+-- Review current candidate counts before running. Archive tables are private to Neon.
 
 BEGIN;
 
