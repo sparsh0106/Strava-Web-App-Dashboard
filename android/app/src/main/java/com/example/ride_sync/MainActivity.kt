@@ -232,16 +232,18 @@ class MainActivity : ComponentActivity() {
                                                 today,
                                                 this@MainActivity
                                             )
-                                            if (history.isEmpty()) {
-                                                status = "No cycling rides were found in Samsung Health."
+                                            val routeHistory = history.filter { it.routePoints.isNotEmpty() }
+                                            if (routeHistory.isEmpty()) {
+                                                status = "No previous cycling GPS routes were found in Samsung Health."
                                             } else {
-                                                status = "Uploading ${history.size} previous rides, routes, and available workout samples…"
+                                                status = "Matching ${routeHistory.size} GPS routes to existing RideScope rides… Summary data will not be uploaded."
                                                 val result = withContext(Dispatchers.IO) {
-                                                    SamsungRideSyncEngine.sync(syncToken.trim(), history)
+                                                    SamsungRideSyncEngine.syncRoutes(syncToken.trim(), routeHistory)
                                                 }
-                                                AutoSyncState.markSynced(context, history)
+                                                val handledIds = result.linkedSourceRecordIds + result.existingRouteSourceRecordIds
+                                                AutoSyncState.markSynced(context, history.filter { it.sourceRecordId in handledIds })
                                                 rides = history.take(30)
-                                                status = "Backfill complete · ${result.rides} rides, ${result.routePoints} GPS points, and ${result.exerciseSamples} workout samples saved to RideScope."
+                                                status = "GPS-only backfill complete · ${result.linkedSourceRecordIds.size} routes attached, ${result.routePoints} GPS points saved. ${result.unmatchedSourceRecordIds.size} had no safe match, ${result.ambiguousSourceRecordIds.size} were ambiguous, and ${result.existingRouteSourceRecordIds.size} already had routes. Ride summaries were left unchanged."
                                             }
                                             AutoSyncState.setStatus(context, status)
                                         } catch (error: Exception) {
@@ -256,17 +258,17 @@ class MainActivity : ComponentActivity() {
                             },
                             enabled = !working,
                             modifier = Modifier.fillMaxWidth()
-                        ) { Text(if (working) "Backfilling rides…" else "Sync previous rides and GPS routes") }
+                        ) { Text(if (working) "Syncing GPS routes…" else "Sync previous GPS routes only") }
 
                         Text(
-                            "One-time history backfill: safely re-uploads existing Samsung workouts using idempotent ride IDs. Exact GPS routes and available heart-rate, speed, cadence, and power samples are saved to your database.",
+                            "One-time GPS-only backfill: matches Samsung routes to existing RideScope rides using start time and distance, then saves route points only. It does not create rides or change distance, speed, heart rate, or other summary fields. Unmatched or ambiguous routes are skipped.",
                             style = MaterialTheme.typography.bodySmall
                         )
 
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("PRIVATE UPLOAD", style = MaterialTheme.typography.labelLarge)
-                                Text("Your sync token is encrypted on this phone. Automatic sync uploads only new rides. The one-time history action re-uploads older rides safely so their GPS routes and available workout samples reach the database.")
+                                Text("Your sync token is encrypted on this phone. Automatic sync uploads summaries for new rides. Historical route sync attaches GPS points to existing rides without replacing their summary data.")
                             }
                         }
 

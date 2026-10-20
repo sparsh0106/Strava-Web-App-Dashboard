@@ -24,6 +24,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 private const val SYNC_URL = "https://sparshrides.vercel.app/api/sync/samsung"
+private const val ROUTE_SYNC_URL = "https://sparshrides.vercel.app/api/sync/samsung/routes"
 private const val RIDES_PER_UPLOAD = 20
 private const val SAMPLES_PER_UPLOAD = 8_000
 private const val DEVICE_NAME = "Watch"
@@ -131,6 +132,19 @@ internal fun RideRecord.mergeDuplicate(other: RideRecord): RideRecord {
 
 internal data class SyncResult(val rides: Int, val routePoints: Int, val exerciseSamples: Int)
 
+internal data class RouteSyncResult(
+    val linkedSourceRecordIds: Set<String>,
+    val unmatchedSourceRecordIds: Set<String>,
+    val ambiguousSourceRecordIds: Set<String>,
+    val existingRouteSourceRecordIds: Set<String>,
+    val routePoints: Int
+)
+
+private data class RouteBatchResult(
+    val matches: List<Pair<String, String>>,
+    val routePoints: Int
+)
+
 internal class SyncHttpException(val statusCode: Int, message: String) : IOException(message)
 
 internal object SamsungRideSyncEngine {
@@ -215,7 +229,33 @@ internal object SamsungRideSyncEngine {
             syncedPoints += result.second
             syncedSamples += result.third
         }
-        return SyncResult(rides.map { it.sourceRecordId }.distinct().size, syncedPoints, syncedSamples)
+        return SyncResult(syncedRides, syncedPoints, syncedSamples)
+    }
+
+    /** Upload route geometry only, attaching it to a uniquely matched existing RideScope ride. */
+    fun syncRoutes(token: String, rides: List<RideRecord>): RouteSyncResult {
+        val routeRides = rides.filter { it.routePoints.isNotEmpty() }.map {
+            it.copy(exerciseSamples = emptyList(), replaceExerciseSamples = false)
+        }
+        val linked = linkedSetOf<String>()
+        val unmatched = linkedSetOf<String>()
+        val ambiguous = linkedSetOf<String>()
+        val existingRoute = linkedSetOf<String>()
+        var syncedPoints = 0
+
+        uploadBatches(routeRides).forEach { batch ->
+            val result = uploadRouteBatch(token, batch)
+            syncedPoints += result.routePoints
+            result.matches.forEach { (sourceRecordId, status) ->
+                when (status) {
+                    "linked" -> linked.add(sourceRecordId)
+                    "unmatched" -> unmatched.add(sourceRecordId)
+                    "ambiguous" -> ambiguous.add(sourceRecordId)
+                    "existing_route" -> existingRoute.add(sourceRecordId)
+                }
+            }
+        }
+        return RouteSyncResult(linked, unmatched, ambiguous, existingRoute, syncedPoints)
     }
 
     private fun ExerciseSession.toRide(recordId: String, index: Int, includeRoute: Boolean): RideRecord {
@@ -305,6 +345,49 @@ internal object SamsungRideSyncEngine {
                 response.optInt("routePointsSynced"),
                 response.optInt("exerciseSamplesSynced")
             )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun uploadRouteBatch(token: String, rides: List<RideRecord>): RouteBatchResult {
+        val connection = (URL(ROUTE_SYNC_URL).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 20_000
+            readTimeout = 90_000
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            val payload = routeSyncPayload(rides).toByteArray(StandardCharsets.UTF_8)
+            connection.setFixedLengthStreamingMode(payload.size)
+            connection.outputStream.use { it.write(payload) }
+            val statusCode = connection.responseCode
+            val responseStream = if (statusCode in 200..299) connection.inputStream else connection.errorStream
+            val responseText = responseStream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (statusCode !in 200..299) {
+                val detail = runCatching { JSONObject(responseText).optString("error") }.getOrNull().orEmpty()
+                val message = detail.ifBlank {
+                    if (statusCode == 404) {
+                        "RideScope's GPS-only upload endpoint was not found (HTTP 404). Redeploy the latest server code."
+                    } else {
+                        "RideScope rejected the GPS-only upload (HTTP $statusCode)."
+                    }
+                }
+                throw SyncHttpException(statusCode, message)
+            }
+            val response = JSONObject(responseText)
+            if (!response.optBoolean("ok")) throw IOException("RideScope did not confirm the GPS route sync.")
+            val matches = buildList {
+                val entries = response.optJSONArray("matches") ?: JSONArray()
+                for (index in 0 until entries.length()) {
+                    val entry = entries.optJSONObject(index) ?: continue
+                    add(entry.optString("sourceRecordId") to entry.optString("status"))
+                }
+            }
+            return RouteBatchResult(matches, response.optInt("routePointsSynced"))
         } finally {
             connection.disconnect()
         }
@@ -407,6 +490,34 @@ internal object SamsungRideSyncEngine {
                                 putNullable(this, "cadenceRpm", sample.cadenceRpm)
                                 putNullable(this, "powerWatts", sample.powerWatts)
                                 putNullable(this, "speedMetersPerSecond", sample.speedMetersPerSecond)
+                            })
+                        }
+                    })
+                })
+            }
+        })
+    }.toString()
+
+    private fun routeSyncPayload(records: List<RideRecord>): String = JSONObject().apply {
+        put("schemaVersion", 1)
+        put("timezone", ZoneId.systemDefault().id)
+        put("rides", JSONArray().apply {
+            records.forEach { ride ->
+                put(JSONObject().apply {
+                    put("sourceRecordId", ride.sourceRecordId)
+                    put("startTime", ride.startTime.toString())
+                    // Distance is used only to identify an existing database ride; the route-only
+                    // endpoint never writes it or changes any ride summary fields.
+                    putNullable(this, "distanceMeters", ride.distanceMeters)
+                    put("replaceRoutePoints", ride.replaceRoutePoints)
+                    put("routePoints", JSONArray().apply {
+                        ride.routePoints.forEach { point ->
+                            put(JSONObject().apply {
+                                put("sequence", point.sequence)
+                                put("timestamp", point.timestamp.toString())
+                                put("latitude", point.latitude)
+                                put("longitude", point.longitude)
+                                putNullable(this, "altitudeMeters", point.altitudeMeters)
                             })
                         }
                     })

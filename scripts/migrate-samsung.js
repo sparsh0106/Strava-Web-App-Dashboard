@@ -71,7 +71,15 @@ await sql.transaction(tx => [
       speed_meters_per_second numeric(10, 4),
       PRIMARY KEY (ride_id, sequence)
     )
-  `
+  `,
+  tx`
+    CREATE TABLE IF NOT EXISTS samsung_route_links (
+      source_record_id text PRIMARY KEY,
+      ride_id bigint NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  tx`CREATE INDEX IF NOT EXISTS samsung_route_links_ride_id_idx ON samsung_route_links (ride_id)`
 ]);
 
 const [result] = await sql`SELECT count(*)::int AS ride_count FROM rides`;

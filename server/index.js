@@ -15,6 +15,7 @@ const ROUTE_VIEW_PASSWORD = process.env.ROUTE_VIEW_PASSWORD;
 const sql = DATABASE_URL ? neon(DATABASE_URL) : null;
 const ROUTE_COOKIE = "ridescope_private_access";
 const ROUTE_SESSION_SECONDS = 12 * 60 * 60;
+let samsungRouteLinksReady;
 
 const RIDE_HEADERS = [
   "Date",
@@ -106,6 +107,22 @@ function validTimestamp(value, name) {
     throw new TypeError(`${name} must be an ISO 8601 timestamp.`);
   }
   return value;
+}
+
+async function ensureSamsungRouteLinks() {
+  if (!samsungRouteLinksReady) {
+    samsungRouteLinksReady = sql`
+      CREATE TABLE IF NOT EXISTS samsung_route_links (
+        source_record_id text PRIMARY KEY,
+        ride_id bigint NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `.catch(error => {
+      samsungRouteLinksReady = null;
+      throw error;
+    });
+  }
+  await samsungRouteLinksReady;
 }
 
 function durationText(seconds) {
@@ -243,6 +260,68 @@ function normalizeSamsungSync(body) {
     throw new TypeError("Each sync request is limited to 50000 total route and exercise samples.");
   }
   return { timezone, rides, routePointCount, exerciseSampleCount };
+}
+
+function normalizeSamsungRouteSync(body) {
+  if (!body || body.schemaVersion !== 1 || !Array.isArray(body.rides)) {
+    throw new TypeError("Expected schemaVersion 1 and a rides array.");
+  }
+  if (body.rides.length < 1 || body.rides.length > 25) {
+    throw new TypeError("Each GPS sync request must contain between 1 and 25 rides.");
+  }
+  const timezone = requiredText(body.timezone, "timezone", 64);
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: timezone });
+  } catch {
+    throw new TypeError("timezone must be a valid IANA time zone.");
+  }
+
+  const seenIds = new Set();
+  let routePointCount = 0;
+  const rides = body.rides.map((ride, rideIndex) => {
+    const prefix = `rides[${rideIndex}]`;
+    if (!ride || typeof ride !== "object" || Array.isArray(ride)) {
+      throw new TypeError(`${prefix} must be an object.`);
+    }
+    const sourceRecordId = requiredText(ride.sourceRecordId, `${prefix}.sourceRecordId`, 255);
+    if (seenIds.has(sourceRecordId)) throw new TypeError(`Duplicate sourceRecordId in request: ${sourceRecordId}.`);
+    seenIds.add(sourceRecordId);
+    const startTime = validTimestamp(ride.startTime, `${prefix}.startTime`);
+    const distanceMeters = optionalNumber(ride.distanceMeters, `${prefix}.distanceMeters`, 0, 2000000);
+    const rawPoints = ride.routePoints;
+    if (!Array.isArray(rawPoints) || rawPoints.length < 1 || rawPoints.length > 20000) {
+      throw new TypeError(`${prefix}.routePoints must contain between 1 and 20000 points.`);
+    }
+    routePointCount += rawPoints.length;
+    if (routePointCount > 50000) throw new TypeError("Each GPS sync request is limited to 50000 route points.");
+    const routePoints = rawPoints.map((point, pointIndex) => {
+      if (!point || typeof point !== "object" || Array.isArray(point)) {
+        throw new TypeError(`${prefix}.routePoints[${pointIndex}] must be an object.`);
+      }
+      if (!Number.isSafeInteger(point.sequence) || point.sequence < 0) {
+        throw new TypeError(`${prefix}.routePoints[${pointIndex}].sequence must be a non-negative integer.`);
+      }
+      const latitude = optionalNumber(point.latitude, `${prefix}.routePoints[${pointIndex}].latitude`, -90, 90);
+      const longitude = optionalNumber(point.longitude, `${prefix}.routePoints[${pointIndex}].longitude`, -180, 180);
+      if (latitude === null || longitude === null) throw new TypeError(`${prefix}.routePoints[${pointIndex}] needs latitude and longitude.`);
+      return {
+        sequence: point.sequence,
+        timestamp: validTimestamp(point.timestamp, `${prefix}.routePoints[${pointIndex}].timestamp`),
+        latitude,
+        longitude,
+        altitude_meters: optionalNumber(point.altitudeMeters, `${prefix}.routePoints[${pointIndex}].altitudeMeters`, -12000, 100000)
+      };
+    });
+    if (new Set(routePoints.map(point => point.sequence)).size !== routePoints.length) {
+      throw new TypeError(`${prefix}.routePoints contains duplicate sequence values.`);
+    }
+    const replaceRoutePoints = ride.replaceRoutePoints === undefined ? true : ride.replaceRoutePoints;
+    if (typeof replaceRoutePoints !== "boolean") {
+      throw new TypeError(`${prefix}.replaceRoutePoints must be a boolean value.`);
+    }
+    return { source_record_id: sourceRecordId, start_time: startTime, distance_meters: distanceMeters, route_points: routePoints, replace_route_points: replaceRoutePoints };
+  });
+  return { timezone, rides, routePointCount };
 }
 
 app.get("/api/rides", async (_req, res) => {
@@ -408,6 +487,187 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
+app.post("/api/sync/samsung/routes", async (req, res) => {
+  noStore(res);
+  if (!isAuthorizedSync(req)) {
+    const configured = Boolean(SAMSUNG_SYNC_TOKEN && SAMSUNG_SYNC_TOKEN.length >= 32);
+    return res.status(configured ? 401 : 503).json({
+      ok: false,
+      error: configured ? "Unauthorized." : "Samsung sync is not configured on the server."
+    });
+  }
+  if (!sql) return res.status(503).json({ ok: false, error: "Database is not configured on the server." });
+
+  let sync;
+  try {
+    sync = normalizeSamsungRouteSync(req.body);
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Invalid GPS sync payload." });
+  }
+
+  try {
+    await ensureSamsungRouteLinks();
+    const matchingInput = JSON.stringify(sync.rides.map(ride => ({
+      source_record_id: ride.source_record_id,
+      start_time: ride.start_time,
+      distance_meters: ride.distance_meters
+    })));
+    const matches = await sql`
+      WITH incoming AS (
+        SELECT * FROM jsonb_to_recordset(${matchingInput}::jsonb) AS ride(
+          source_record_id text,
+          start_time timestamptz,
+          distance_meters double precision
+        )
+      )
+      SELECT
+        incoming.source_record_id,
+        linked.ride_id::text AS linked_ride_id,
+        candidate.candidate_count,
+        candidate.candidate_ride_id,
+        candidate.has_existing_route
+      FROM incoming
+      LEFT JOIN samsung_route_links AS linked
+        ON linked.source_record_id = incoming.source_record_id
+      LEFT JOIN LATERAL (
+        SELECT
+          count(*)::int AS candidate_count,
+          min(candidates.id)::text AS candidate_ride_id,
+          coalesce(bool_or(candidates.has_route), false) AS has_existing_route
+        FROM (
+          SELECT
+            ride.id,
+            EXISTS (
+              SELECT 1 FROM ride_route_points AS route
+              WHERE route.ride_id = ride.id
+            ) AS has_route
+          FROM rides AS ride
+          WHERE incoming.distance_meters IS NOT NULL
+            AND ride.start_time IS NOT NULL
+            AND ride.distance IS NOT NULL
+            AND (ride.ride_date::timestamp + ride.start_time) BETWEEN
+              (incoming.start_time AT TIME ZONE ${sync.timezone}) - interval '5 minutes'
+              AND (incoming.start_time AT TIME ZONE ${sync.timezone}) + interval '5 minutes'
+            AND abs(ride.distance - incoming.distance_meters / 1000.0)
+              <= greatest(0.25, incoming.distance_meters / 1000.0 * 0.02)
+        ) AS candidates
+      ) AS candidate ON linked.ride_id IS NULL
+    `;
+
+    const classified = matches.map(match => {
+      if (match.linked_ride_id !== null) {
+        return { source_record_id: match.source_record_id, ride_id: String(match.linked_ride_id), status: "linked" };
+      }
+      const candidateCount = Number(match.candidate_count ?? 0);
+      if (candidateCount === 0) return { source_record_id: match.source_record_id, ride_id: null, status: "unmatched" };
+      if (candidateCount > 1) return { source_record_id: match.source_record_id, ride_id: null, status: "ambiguous" };
+      if (match.has_existing_route) return { source_record_id: match.source_record_id, ride_id: null, status: "existing_route" };
+      return { source_record_id: match.source_record_id, ride_id: String(match.candidate_ride_id), status: "matched" };
+    });
+
+    // Never let two Samsung sessions overwrite points on the same RideScope row.
+    const targetGroups = new Map();
+    classified.filter(match => match.ride_id).forEach(match => {
+      const group = targetGroups.get(match.ride_id) ?? [];
+      group.push(match);
+      targetGroups.set(match.ride_id, group);
+    });
+    targetGroups.forEach(group => {
+      if (group.length > 1) group.forEach(match => {
+        match.ride_id = null;
+        match.status = "ambiguous";
+      });
+    });
+
+    const ridesBySourceId = new Map(sync.rides.map(ride => [ride.source_record_id, ride]));
+    const accepted = classified
+      .filter(match => match.ride_id && (match.status === "linked" || match.status === "matched"))
+      .map(match => ({ ...ridesBySourceId.get(match.source_record_id), ride_id: match.ride_id }));
+    const newLinks = accepted
+      .filter(ride => classified.some(match => match.source_record_id === ride.source_record_id && match.status === "matched"))
+      .map(ride => ({ source_record_id: ride.source_record_id, ride_id: ride.ride_id }));
+
+    if (accepted.length) {
+      const linksJson = JSON.stringify(newLinks);
+      const routesJson = JSON.stringify(accepted.map(ride => ({
+        source_record_id: ride.source_record_id,
+        replace_route_points: ride.replace_route_points,
+        route_points: ride.route_points
+      })));
+      await sql.transaction(tx => {
+        const queries = [];
+        if (newLinks.length) {
+          queries.push(tx`
+            WITH incoming AS (
+              SELECT * FROM jsonb_to_recordset(${linksJson}::jsonb) AS link(
+                source_record_id text,
+                ride_id bigint
+              )
+            )
+            INSERT INTO samsung_route_links (source_record_id, ride_id)
+            SELECT source_record_id, ride_id FROM incoming
+            ON CONFLICT (source_record_id) DO NOTHING
+          `);
+        }
+        if (accepted.some(ride => ride.replace_route_points)) {
+          queries.push(tx`
+            WITH incoming AS (
+              SELECT * FROM jsonb_to_recordset(${routesJson}::jsonb) AS ride(
+                source_record_id text,
+                replace_route_points boolean
+              )
+            )
+            DELETE FROM ride_route_points AS route
+            USING incoming, samsung_route_links AS link
+            WHERE incoming.replace_route_points
+              AND link.source_record_id = incoming.source_record_id
+              AND route.ride_id = link.ride_id
+          `);
+        }
+        queries.push(tx`
+          WITH incoming AS (
+            SELECT * FROM jsonb_to_recordset(${routesJson}::jsonb) AS ride(
+              source_record_id text,
+              route_points jsonb
+            )
+          ), points AS (
+            SELECT incoming.source_record_id, point.*
+            FROM incoming
+            CROSS JOIN LATERAL jsonb_to_recordset(incoming.route_points) AS point(
+              sequence integer,
+              timestamp timestamptz,
+              latitude double precision,
+              longitude double precision,
+              altitude_meters double precision
+            )
+          )
+          INSERT INTO ride_route_points (ride_id, sequence, recorded_at, latitude, longitude, altitude_meters)
+          SELECT link.ride_id, points.sequence, points.timestamp, points.latitude, points.longitude, points.altitude_meters
+          FROM points
+          JOIN samsung_route_links AS link USING (source_record_id)
+          ON CONFLICT (ride_id, sequence)
+          DO UPDATE SET
+            recorded_at = EXCLUDED.recorded_at,
+            latitude = EXCLUDED.latitude,
+            longitude = EXCLUDED.longitude,
+            altitude_meters = EXCLUDED.altitude_meters
+        `);
+        return queries;
+      });
+    }
+
+    const statuses = classified.map(match => ({ sourceRecordId: match.source_record_id, status: match.status }));
+    return res.json({
+      ok: true,
+      matches: statuses,
+      routePointsSynced: accepted.reduce((total, ride) => total + ride.route_points.length, 0)
+    });
+  } catch (error) {
+    console.error("Samsung GPS-only sync failed:", error instanceof Error ? error.name : "Unknown error");
+    return res.status(500).json({ ok: false, error: "Could not attach Samsung GPS routes to existing rides. Retry the sync." });
+  }
+});
+
 app.post("/api/sync/samsung", async (req, res) => {
   noStore(res);
   if (!isAuthorizedSync(req)) {
@@ -418,6 +678,13 @@ app.post("/api/sync/samsung", async (req, res) => {
     });
   }
   if (!sql) return res.status(503).json({ ok: false, error: "Database is not configured on the server." });
+
+  try {
+    await ensureSamsungRouteLinks();
+  } catch (error) {
+    console.error("Samsung route-link schema check failed:", error instanceof Error ? error.name : "Unknown error");
+    return res.status(503).json({ ok: false, error: "Samsung sync storage is not ready. Retry shortly." });
+  }
 
   let sync;
   try {
@@ -483,6 +750,10 @@ app.post("/api/sync/samsung", async (req, res) => {
           incoming.duration_seconds,
           incoming.calories_kcal
         FROM incoming
+        WHERE NOT EXISTS (
+          SELECT 1 FROM samsung_route_links AS route_link
+          WHERE route_link.source_record_id = incoming.source_record_id
+        )
         ON CONFLICT (source_system, source_record_id) WHERE source_record_id IS NOT NULL
         DO UPDATE SET
           ride_date = EXCLUDED.ride_date,

@@ -57,3 +57,14 @@ CREATE TABLE IF NOT EXISTS ride_exercise_samples (
   speed_meters_per_second numeric(10, 4),
   PRIMARY KEY (ride_id, sequence)
 );
+
+-- Links Samsung Health sessions to existing imported rides when only GPS
+-- history is being backfilled. This does not change ride summary fields.
+CREATE TABLE IF NOT EXISTS samsung_route_links (
+  source_record_id text PRIMARY KEY,
+  ride_id bigint NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS samsung_route_links_ride_id_idx
+  ON samsung_route_links (ride_id);
