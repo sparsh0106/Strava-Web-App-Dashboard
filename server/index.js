@@ -335,6 +335,7 @@ app.get("/api/rides", async (_req, res) => {
   }
 
   try {
+    await ensureSamsungRouteLinks();
     const rides = await sql`
       SELECT
         CASE
@@ -357,8 +358,17 @@ app.get("/api/rides", async (_req, res) => {
         source_system,
         activity_type,
         title
-      FROM rides
-      ORDER BY id ASC
+      FROM rides AS ride
+      WHERE NOT (
+        ride.source_system = 'samsung_health'
+        AND EXISTS (
+          SELECT 1
+          FROM samsung_route_links AS route_link
+          WHERE route_link.source_record_id = ride.source_record_id
+            AND route_link.ride_id <> ride.id
+        )
+      )
+      ORDER BY ride.id ASC
     `;
 
     return res.json({
@@ -530,27 +540,51 @@ app.post("/api/sync/samsung/routes", async (req, res) => {
       LEFT JOIN samsung_route_links AS linked
         ON linked.source_record_id = incoming.source_record_id
       LEFT JOIN LATERAL (
-        SELECT
-          count(*)::int AS candidate_count,
-          min(candidates.id)::text AS candidate_ride_id,
-          coalesce(bool_or(candidates.has_route), false) AS has_existing_route
-        FROM (
+        WITH candidate_rides AS (
           SELECT
             ride.id,
+            ride.source_system,
+            ride.ride_date,
+            ride.distance,
             EXISTS (
               SELECT 1 FROM ride_route_points AS route
               WHERE route.ride_id = ride.id
             ) AS has_route
           FROM rides AS ride
           WHERE incoming.distance_meters IS NOT NULL
-            AND ride.start_time IS NOT NULL
             AND ride.distance IS NOT NULL
-            AND (ride.ride_date::timestamp + ride.start_time) BETWEEN
-              (incoming.start_time AT TIME ZONE ${sync.timezone}) - interval '5 minutes'
-              AND (incoming.start_time AT TIME ZONE ${sync.timezone}) + interval '5 minutes'
             AND abs(ride.distance - incoming.distance_meters / 1000.0)
               <= greatest(0.25, incoming.distance_meters / 1000.0 * 0.02)
-        ) AS candidates
+            AND (
+              (
+                ride.start_time IS NOT NULL
+                AND (ride.ride_date::timestamp + ride.start_time) BETWEEN
+                  (incoming.start_time AT TIME ZONE ${sync.timezone}) - interval '5 minutes'
+                  AND (incoming.start_time AT TIME ZONE ${sync.timezone}) + interval '5 minutes'
+              )
+              OR (
+                ride.start_time IS NULL
+                AND ride.ride_date = (incoming.start_time AT TIME ZONE ${sync.timezone})::date
+              )
+            )
+        ), preferred_rides AS (
+          SELECT *
+          FROM candidate_rides
+          WHERE source_system IS DISTINCT FROM 'samsung_health'
+          UNION ALL
+          SELECT samsung.*
+          FROM candidate_rides AS samsung
+          WHERE samsung.source_system = 'samsung_health'
+            AND NOT EXISTS (
+              SELECT 1 FROM candidate_rides AS canonical
+              WHERE canonical.source_system IS DISTINCT FROM 'samsung_health'
+            )
+        )
+        SELECT
+          count(*)::int AS candidate_count,
+          min(id)::text AS candidate_ride_id,
+          coalesce(bool_or(has_route), false) AS has_existing_route
+        FROM preferred_rides
       ) AS candidate ON linked.ride_id IS NULL
     `;
 

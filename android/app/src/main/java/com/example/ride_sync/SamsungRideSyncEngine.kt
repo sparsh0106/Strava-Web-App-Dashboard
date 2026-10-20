@@ -248,7 +248,7 @@ internal object SamsungRideSyncEngine {
             syncedPoints += result.routePoints
             result.matches.forEach { (sourceRecordId, status) ->
                 when (status) {
-                    "linked" -> linked.add(sourceRecordId)
+                    "linked", "matched" -> linked.add(sourceRecordId)
                     "unmatched" -> unmatched.add(sourceRecordId)
                     "ambiguous" -> ambiguous.add(sourceRecordId)
                     "existing_route" -> existingRoute.add(sourceRecordId)
