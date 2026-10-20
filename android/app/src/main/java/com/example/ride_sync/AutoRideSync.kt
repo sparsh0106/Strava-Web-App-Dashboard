@@ -76,6 +76,7 @@ internal object AutoSyncState {
         writeKnownRides(
             context,
             rides.filterNot { it.autoDetected == true }
+                .filter { it.isOverMinimumDistance() }
                 .filter { it.startTime.atZone(java.time.ZoneId.systemDefault()).toLocalDate().isBefore(today) }
                 .map(::identity)
         )
@@ -107,6 +108,7 @@ internal object AutoSyncState {
     fun unseenRides(context: Context, rides: List<RideRecord>): List<RideRecord> {
         val known = readKnownRides(context)
         return rides.filterNot { it.autoDetected == true }
+            .filter { it.isOverMinimumDistance() }
             .filter { ride -> known.none { it.matches(ride) } }
     }
 
@@ -234,7 +236,7 @@ class SamsungRideSyncWorker(context: Context, params: WorkerParameters) : Corout
             if (newRides.isEmpty()) {
                 AutoSyncState.setStatus(
                     applicationContext,
-                    "Automatic sync is on · checked ${rides.count { it.autoDetected != true }} manual rides · ignored ${rides.count { it.autoDetected == true }} auto-detected rides · no new rides found."
+                    "Automatic sync is on · checked ${rides.count { it.autoDetected != true && it.isOverMinimumDistance() }} manual rides over 5 km · skipped ${rides.count { it.autoDetected != true && !it.isOverMinimumDistance() }} short or unknown-distance rides · ignored ${rides.count { it.autoDetected == true }} auto-detected rides · no new rides found."
                 )
                 Result.success()
             } else {
@@ -244,7 +246,7 @@ class SamsungRideSyncWorker(context: Context, params: WorkerParameters) : Corout
                 AutoSyncState.markSynced(applicationContext, newRides)
                 AutoSyncState.setStatus(
                     applicationContext,
-                    "Auto-synced ${result.rides} new manual rides · ignored ${rides.count { it.autoDetected == true }} auto-detected rides · ${result.routePoints} GPS points."
+                    "Auto-synced ${result.rides} new manual rides over 5 km · skipped ${rides.count { it.autoDetected != true && !it.isOverMinimumDistance() }} short or unknown-distance rides · ignored ${rides.count { it.autoDetected == true }} auto-detected rides · ${result.routePoints} GPS points."
                 )
                 Result.success()
             }

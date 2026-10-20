@@ -15,6 +15,8 @@ const ROUTE_VIEW_PASSWORD = process.env.ROUTE_VIEW_PASSWORD;
 const sql = DATABASE_URL ? neon(DATABASE_URL) : null;
 const ROUTE_COOKIE = "ridescope_private_access";
 const ROUTE_SESSION_SECONDS = 12 * 60 * 60;
+const MIN_RIDE_DISTANCE_KM = 5;
+const MIN_RIDE_DISTANCE_METERS = MIN_RIDE_DISTANCE_KM * 1000;
 let samsungRouteLinksReady;
 
 const RIDE_HEADERS = [
@@ -387,6 +389,7 @@ app.get("/api/rides", async (_req, res) => {
         title
       FROM rides AS ride
       WHERE ride.auto_detected IS NOT TRUE
+        AND ride.distance > ${MIN_RIDE_DISTANCE_KM}
         AND NOT (
         ride.source_system = 'samsung_health'
         AND EXISTS (
@@ -459,7 +462,7 @@ app.get("/api/rides/:rideId/analysis", async (req, res) => {
   try {
     const rideId = req.params.rideId;
     await ensureSamsungRouteLinks();
-    const [ride] = await sql`SELECT id, duration_seconds, calories_kcal, source_system, activity_type, title FROM rides WHERE id = ${rideId} AND auto_detected IS NOT TRUE`;
+    const [ride] = await sql`SELECT id, duration_seconds, calories_kcal, source_system, activity_type, title FROM rides WHERE id = ${rideId} AND auto_detected IS NOT TRUE AND distance > ${MIN_RIDE_DISTANCE_KM}`;
     if (!ride) return res.status(404).json({ ok: false, error: "Ride not found." });
     const [routePoints, exerciseSamples] = await Promise.all([
       sql`SELECT recorded_at, latitude, longitude, altitude_meters FROM ride_route_points WHERE ride_id = ${rideId} ORDER BY sequence ASC`,
@@ -512,6 +515,7 @@ app.get("/api/health", async (_req, res) => {
       SELECT count(*)::int AS ride_count
       FROM rides AS ride
       WHERE ride.auto_detected IS NOT TRUE
+        AND ride.distance > ${MIN_RIDE_DISTANCE_KM}
         AND NOT (
         ride.source_system = 'samsung_health'
         AND EXISTS (
@@ -617,9 +621,9 @@ app.post("/api/sync/samsung/routes", async (req, res) => {
               WHERE route.ride_id = ride.id
             ) AS has_route
           FROM rides AS ride
-          WHERE incoming.distance_meters IS NOT NULL
+          WHERE incoming.distance_meters > ${MIN_RIDE_DISTANCE_METERS}
             AND ride.auto_detected IS NOT TRUE
-            AND ride.distance IS NOT NULL
+            AND ride.distance > ${MIN_RIDE_DISTANCE_KM}
             AND abs(ride.distance - incoming.distance_meters / 1000.0)
               <= greatest(0.25, incoming.distance_meters / 1000.0 * 0.02)
             AND (
@@ -668,6 +672,9 @@ app.post("/api/sync/samsung/routes", async (req, res) => {
       const ride = ridesBySourceId.get(match.source_record_id);
       if (ride.auto_detected) {
         return { source_record_id: match.source_record_id, source_record_ids: ride.source_record_ids, ride_id: null, status: "auto_detected" };
+      }
+      if (ride.distance_meters === null || ride.distance_meters <= MIN_RIDE_DISTANCE_METERS) {
+        return { source_record_id: match.source_record_id, source_record_ids: ride.source_record_ids, ride_id: null, status: "under_minimum_distance" };
       }
       if (Number(match.linked_count ?? 0) > 1) {
         return { source_record_id: match.source_record_id, source_record_ids: ride.source_record_ids, ride_id: null, status: "ambiguous" };
@@ -836,14 +843,20 @@ app.post("/api/sync/samsung", async (req, res) => {
       `;
     }
 
-    const uploadableRides = sync.rides.filter(ride => !ride.auto_detected);
+    const uploadableRides = sync.rides.filter(ride =>
+      !ride.auto_detected && ride.distance_meters !== null && ride.distance_meters > MIN_RIDE_DISTANCE_METERS
+    );
+    const shortOrUnknownDistanceSkipped = sync.rides.filter(ride =>
+      !ride.auto_detected && (ride.distance_meters === null || ride.distance_meters <= MIN_RIDE_DISTANCE_METERS)
+    ).length;
     if (uploadableRides.length === 0) {
       return res.json({
         ok: true,
         ridesSynced: 0,
         routePointsSynced: 0,
         exerciseSamplesSynced: 0,
-        autoDetectedSkipped: autoDetectedRides.length
+        autoDetectedSkipped: autoDetectedRides.length,
+        shortOrUnknownDistanceSkipped
       });
     }
 
@@ -1033,7 +1046,8 @@ app.post("/api/sync/samsung", async (req, res) => {
       ridesSynced: transaction[0].length,
       routePointsSynced: uploadableRides.reduce((total, ride) => total + ride.route_points.length, 0),
       exerciseSamplesSynced: uploadableRides.reduce((total, ride) => total + ride.exercise_samples.length, 0),
-      autoDetectedSkipped: autoDetectedRides.length
+      autoDetectedSkipped: autoDetectedRides.length,
+      shortOrUnknownDistanceSkipped
     });
   } catch (error) {
     console.error("Samsung ride sync failed:", error instanceof Error ? error.name : "Unknown error");

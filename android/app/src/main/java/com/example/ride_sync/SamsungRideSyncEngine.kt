@@ -27,6 +27,7 @@ private const val SYNC_URL = "https://sparshrides.vercel.app/api/sync/samsung"
 private const val ROUTE_SYNC_URL = "https://sparshrides.vercel.app/api/sync/samsung/routes"
 private const val RIDES_PER_UPLOAD = 20
 private const val SAMPLES_PER_UPLOAD = 8_000
+internal const val MIN_RIDE_DISTANCE_METERS = 5_000.0
 private const val DEVICE_NAME = "Watch"
 private const val BIKE_NAME = "Fuji"
 
@@ -72,6 +73,9 @@ internal data class RideRecord(
     val sourceRecordIds: List<String> = listOf(sourceRecordId),
     val autoDetected: Boolean? = null
 )
+
+internal fun RideRecord.isOverMinimumDistance(): Boolean =
+    distanceMeters != null && distanceMeters > MIN_RIDE_DISTANCE_METERS
 
 internal fun RideRecord.isSameSessionAs(other: RideRecord): Boolean {
     // Preserve auto-detected sessions as separate records so we can exclude and
@@ -228,6 +232,7 @@ internal object SamsungRideSyncEngine {
 
     fun sync(token: String, rides: List<RideRecord>): SyncResult {
         val uploadableRides = rides.filterNot { it.autoDetected == true }
+            .filter { it.isOverMinimumDistance() }
         if (uploadableRides.isEmpty()) return SyncResult(0, 0, 0)
         val batches = uploadBatches(uploadableRides)
         var syncedRides = 0
@@ -246,7 +251,7 @@ internal object SamsungRideSyncEngine {
     fun syncRoutes(token: String, rides: List<RideRecord>): RouteSyncResult {
         // Include route-less sessions too: they can be duplicate Samsung summary
         // rows that must be linked to the original ride without writing metrics.
-        val routeRides = rides.map {
+        val routeRides = rides.filter { it.autoDetected == true || it.isOverMinimumDistance() }.map {
             it.copy(
                 routePoints = if (it.autoDetected == true) emptyList() else it.routePoints,
                 exerciseSamples = emptyList(),

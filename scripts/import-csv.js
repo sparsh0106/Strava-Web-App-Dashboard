@@ -22,6 +22,7 @@ const EXPECTED_HEADERS = [
   "HR_mean",
   "Bike"
 ];
+const MIN_RIDE_DISTANCE_KM = 5;
 
 function parseDateTime(value, rowNumber) {
   const raw = String(value ?? "").trim();
@@ -111,7 +112,10 @@ async function main() {
   }
   if (records.length === 0) throw new Error("CSV has no ride rows to import.");
 
-  const rides = records.map(parseRide);
+  const parsedRides = records.map(parseRide);
+  const rides = parsedRides.filter(ride => ride.distance !== null && ride.distance > MIN_RIDE_DISTANCE_KM);
+  const excludedRideCount = parsedRides.length - rides.length;
+  if (rides.length === 0) throw new Error(`No rides are over ${MIN_RIDE_DISTANCE_KM} km; the database was not changed.`);
   const sql = neon(process.env.DATABASE_URL);
   const schema = await readFile(path.join(ROOT, "db", "schema.sql"), "utf8");
   const statements = schema.split(";").map(statement => statement.trim()).filter(Boolean);
@@ -131,7 +135,7 @@ async function main() {
     `)
   ];
   await sql.transaction(replaceAndInsert);
-  console.log(`Imported ${rides.length} rides into PostgreSQL. Existing ride rows were replaced.`);
+  console.log(`Imported ${rides.length} rides over ${MIN_RIDE_DISTANCE_KM} km into PostgreSQL; excluded ${excludedRideCount} rides at or below ${MIN_RIDE_DISTANCE_KM} km or with no distance. Existing ride rows were replaced.`);
 }
 
 main().catch(error => {

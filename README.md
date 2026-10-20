@@ -18,6 +18,8 @@ Add or edit a ride in Neon
 
 The normal workflow is simple: add a row in Neon’s table editor, save it, and RideScope picks it up on its next sync. While the site is open, it checks for database changes about once a minute. Use **Sync** to refresh immediately, or reload the page. Adding a ride does not require a code change, CSV import, or Vercel deployment.
 
+RideScope includes rides only when their recorded distance is **greater than 5 km**. Rides at or below 5 km and rides with no recorded distance are excluded from the dashboard, its counts and analytics, ride analysis, Samsung sync, GPS route matching, and CSV imports. Existing short rows remain stored in Neon but are not returned by the app API.
+
 > **Privacy:** The dashboard's ride summaries remain public through `GET /api/rides`. Exact GPS coordinates and timestamped heart-rate, speed, cadence, and power samples are served only by a password-protected private analysis API. Set `ROUTE_VIEW_PASSWORD` in Vercel Production to enable it. No third-party map provider receives route coordinates.
 
 ## Add a ride
@@ -40,7 +42,7 @@ LIMIT 20;
 
 ## Samsung Health sync
 
-The Android app in **android/** reads Samsung Health cycling sessions and uploads new manually recorded rides to the server-side API. Sessions Samsung marks `autoDetected = true` are excluded from summary uploads and GPS backfill. The server records that classification for any previously uploaded Samsung summary row and hides it from RideScope without deleting the database row. New rides store summaries in `rides`, ordered GPS points in `ride_route_points`, and measured workout samples in `ride_exercise_samples`. Samsung source IDs make these uploads idempotent. If route access is declined, summaries still sync; a later sync with route access fills in route data. Historical reconciliation is separate: **Sync previous GPS routes only** checks non-auto-detected Samsung sessions, including sessions without GPS, against existing RideScope rides by start time and distance. Confirmed Samsung copies are linked to the existing row and hidden from the dashboard; available GPS points are attached to that row. It skips unmatched or ambiguous sessions, does not create ride rows, and never changes distance, speed, heart rate, or any other summary field. Near-identical Samsung records from the same recording mode are coalesced before upload, while all their Samsung source IDs are retained so old duplicate rows can be hidden together.
+The Android app in **android/** reads Samsung Health cycling sessions and uploads new manually recorded rides over 5 km to the server-side API. Sessions Samsung marks `autoDetected = true` are excluded from summary uploads and GPS backfill. The server records that classification for any previously uploaded Samsung summary row and hides it from RideScope without deleting the database row. New rides store summaries in `rides`, ordered GPS points in `ride_route_points`, and measured workout samples in `ride_exercise_samples`. Samsung source IDs make these uploads idempotent. If route access is declined, summaries still sync; a later sync with route access fills in route data. Historical reconciliation is separate: **Sync previous GPS routes only** checks non-auto-detected Samsung sessions over 5 km against existing RideScope rides by start time and distance. Confirmed Samsung copies are linked to the existing row and hidden from the dashboard; available GPS points are attached to that row. It skips rides at or below 5 km, rides with no distance, unmatched sessions, and ambiguous sessions. It does not create ride rows or change distance, speed, heart rate, or any other summary field. Near-identical Samsung records from the same recording mode are coalesced before upload, while all their Samsung source IDs are retained so old duplicate rows can be hidden together.
 
 Samsung provides a session duration plus start and end timestamps, but no separate moving-time field. RideScope uses the start/end difference for `Elapsed_Time` and Samsung's session duration for `Moving_Time`. Synced Samsung sessions are labeled `Device = Watch` and `Bike = Fuji`; distance is stored in kilometres, elevation in metres, and speeds in kilometres per hour. Heart-rate fields use Samsung's mean and maximum values. Missing Samsung metrics remain unavailable. Individual ride analysis shows summary values, an exact route map, GPS-derived elevation profile, and any heart-rate, speed, cadence, or power samples Samsung recorded. The precise route and sample charts require the private-view password; the server uses a short-lived HttpOnly cookie and does not send coordinates to a map tile service.
 
@@ -97,7 +99,7 @@ Use the importer to load or intentionally replace the initial dataset. It valida
    DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
    ```
 
-3. Run the importer with the CSV path:
+3. Run the importer with the CSV path. Only rides over 5 km are imported; rows at or below 5 km or without a distance are excluded:
 
    ```bash
    npm run db:import -- --replace "/path/to/Strava dataset.csv"

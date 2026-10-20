@@ -4,6 +4,8 @@
 
 RideScope is a public cycling analytics dashboard for a Strava activity export stored in PostgreSQL. Visitors do not sign in. The public, read-only `/api/rides` endpoint returns the rows displayed by the site, so only ride information intended for public viewing should be stored in the database. The server uses `DATABASE_URL`; the browser never receives database credentials.
 
+The API, health count, private analysis endpoint, CSV import, Samsung summary upload, and historical GPS matching include only rides whose distance is strictly greater than 5 km. Unknown or missing distances are excluded. Existing short rows remain in PostgreSQL but are filtered from the app.
+
 ## Architecture and key files
 
 - `server/index.js` reads the PostgreSQL `rides` table server-side and provides `/api/rides` and `/api/health`.
