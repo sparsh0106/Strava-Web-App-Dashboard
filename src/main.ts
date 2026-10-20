@@ -590,9 +590,21 @@ function renderQualityRail(): string {
   if (!state.dataset) {
     return `<div class="rail-card rail-card--empty"><div class="rail-icon">${icon("database", 18)}</div><div class="eyebrow">Source</div><h3>Ride data</h3><p>Ride statistics will appear here when the database is available.</p></div>`;
   }
-  const quality = state.dataset.dataQuality;
+  const rides = getScopedRides();
+  const quality = {
+    totalRides: rides.length,
+    ridesWithDistance: rides.filter(ride => ride.distance !== null).length,
+    missing: {
+      distance: rides.filter(ride => ride.distance === null).length,
+      elevation: rides.filter(ride => ride.elevation === null).length,
+      hrMean: rides.filter(ride => ride.hrMean === null).length,
+      startTime: rides.filter(ride => ride.startTime === null).length
+    }
+  };
   const total = Math.max(1, quality.totalRides);
   const complete = Math.round((quality.ridesWithDistance / total) * 100);
+  const scope = state.scope === "all" ? "All time" : String(getSelectedYear());
+  const scopePhrase = state.scope === "all" ? "across all time" : `in ${scope}`;
   const fieldRows = [
     ["Distance", quality.missing.distance],
     ["Elevation", quality.missing.elevation],
@@ -600,9 +612,9 @@ function renderQualityRail(): string {
     ["Start time", quality.missing.startTime]
   ] as const;
   return `<div class="rail-card rail-card--quality">
-    <div class="rail-card-heading"><div><div class="eyebrow">Data pulse</div><h3>Data health</h3></div><span class="quality-score">${complete}%</span></div>
+    <div class="rail-card-heading"><div><div class="eyebrow">Data pulse · ${escapeHtml(scope)}</div><h3>Data health</h3></div><span class="quality-score">${complete}%</span></div>
     <div class="quality-bar"><span style="width:${complete}%"></span></div>
-    <p class="rail-copy">${fmt.n(quality.ridesWithDistance)} of ${fmt.n(quality.totalRides)} rides include a distance value.</p>
+    <p class="rail-copy">${fmt.n(quality.ridesWithDistance)} of ${fmt.n(quality.totalRides)} rides ${escapeHtml(scopePhrase.toLowerCase())} include a distance value.</p>
     <div class="quality-list">${fieldRows.map(([label, missing]) => {
       const coverage = Math.round(((total - missing) / total) * 100);
       return `<div class="quality-row"><span>${label}</span><span class="quality-track"><i style="width:${coverage}%"></i></span><strong>${coverage}%</strong></div>`;
