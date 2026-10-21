@@ -259,8 +259,8 @@ async function getPublicRideRows() {
   return sql`
     SELECT
       ride.id,
-      ride.ride_date,
-      ride.start_time,
+      to_char(ride.ride_date, 'YYYY-MM-DD') AS ride_date,
+      to_char(ride.start_time, 'HH24:MI:SS') AS start_time,
       ride.elapsed_time,
       ride.moving_time,
       ride.distance,
@@ -635,15 +635,20 @@ app.get("/api/rides/:rideId/analysis", async (req, res) => {
         ORDER BY route.recorded_at ASC, route.ride_id ASC, route.sequence ASC
       `,
       sql`
+        WITH requested_rides AS (
+          SELECT value::bigint AS ride_id
+          FROM jsonb_array_elements_text(${routeRideIdsJson}::jsonb)
+        )
         SELECT sample.recorded_at, sample.heart_rate_bpm, sample.cadence_rpm, sample.power_watts, sample.speed_meters_per_second
         FROM ride_exercise_samples AS sample
+        JOIN requested_rides AS requested ON requested.ride_id = sample.ride_id
         LEFT JOIN rides AS source_ride
           ON source_ride.source_system = 'samsung_health'
          AND source_ride.source_record_id = sample.source_record_id
         LEFT JOIN rides AS owner_ride ON owner_ride.id = sample.ride_id
-        WHERE sample.ride_id = ${rideId}
+        WHERE sample.ride_id IN (SELECT ride_id FROM requested_rides)
           AND coalesce(source_ride.source_app_id, owner_ride.source_app_id) = ${SAMSUNG_HEALTH_SOURCE_APP_ID}
-        ORDER BY sample.sequence ASC
+        ORDER BY sample.recorded_at ASC, sample.ride_id ASC, sample.sequence ASC
       `
     ]);
     return res.json({
