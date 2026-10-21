@@ -43,7 +43,28 @@ type Page =
 
 type Scope = "year" | "all";
 type Theme = "light" | "dark";
-type Palette = "ember" | "ocean" | "forest" | "lavender" | "rose" | "citrus";
+type Palette =
+  | "ember"
+  | "ocean"
+  | "forest"
+  | "lavender"
+  | "rose"
+  | "citrus"
+  | "cobalt"
+  | "sunset"
+  | "emerald"
+  | "crimson"
+  | "aurora"
+  | "slate";
+type FontFace =
+  | "google-sans"
+  | "inter"
+  | "plus-jakarta"
+  | "space-grotesk"
+  | "outfit"
+  | "dm-sans"
+  | "editorial"
+  | "jetbrains-mono";
 type SortKey = "date" | "distance" | "speed" | "elevation" | "hr";
 type ToastKind = "success" | "info" | "error";
 
@@ -53,7 +74,24 @@ const PALETTES: { id: Palette; label: string; colors: [string, string, string] }
   { id: "forest", label: "Forest", colors: ["#477a54", "#8a9a45", "#427c78"] },
   { id: "lavender", label: "Lavender", colors: ["#7757b4", "#a36eb9", "#547db2"] },
   { id: "rose", label: "Rose", colors: ["#b33d72", "#dd6f78", "#8456a6"] },
-  { id: "citrus", label: "Citrus", colors: ["#aa7414", "#d39832", "#668a43"] }
+  { id: "citrus", label: "Citrus", colors: ["#aa7414", "#d39832", "#668a43"] },
+  { id: "cobalt", label: "Cobalt", colors: ["#2563eb", "#38bdf8", "#4f46e5"] },
+  { id: "sunset", label: "Sunset", colors: ["#ea580c", "#fb923c", "#db2777"] },
+  { id: "emerald", label: "Emerald", colors: ["#059669", "#10b981", "#0d9488"] },
+  { id: "crimson", label: "Crimson", colors: ["#be123c", "#f43f5e", "#881337"] },
+  { id: "aurora", label: "Aurora", colors: ["#0d9488", "#8b5cf6", "#ec4899"] },
+  { id: "slate", label: "Slate", colors: ["#475569", "#64748b", "#0f766e"] }
+];
+
+const FONTS: { id: FontFace; label: string; style: string; previewFamily: string }[] = [
+  { id: "google-sans", label: "Google Sans", style: "Geometric Sans", previewFamily: '"Google Sans", Arial, sans-serif' },
+  { id: "inter", label: "Inter", style: "Crisp UI Sans", previewFamily: '"Inter", system-ui, sans-serif' },
+  { id: "plus-jakarta", label: "Plus Jakarta", style: "Modern Athletic", previewFamily: '"Plus Jakarta Sans", system-ui, sans-serif' },
+  { id: "space-grotesk", label: "Space Grotesk", style: "Technical Display", previewFamily: '"Space Grotesk", system-ui, sans-serif' },
+  { id: "outfit", label: "Outfit", style: "Bold Geometric", previewFamily: '"Outfit", system-ui, sans-serif' },
+  { id: "dm-sans", label: "DM Sans", style: "Clean Minimal", previewFamily: '"DM Sans", system-ui, sans-serif' },
+  { id: "editorial", label: "Fraunces", style: "Editorial Serif", previewFamily: '"Fraunces", Georgia, serif' },
+  { id: "jetbrains-mono", label: "JetBrains Mono", style: "Telemetry Mono", previewFamily: '"JetBrains Mono", monospace' }
 ];
 
 type GoalValues = {
@@ -95,6 +133,7 @@ type AppState = {
   goals: GoalValues;
   theme: Theme;
   palette: Palette;
+  font: FontFace;
   menuOpen: boolean;
   toast: { message: string; kind: ToastKind } | null;
 };
@@ -250,7 +289,8 @@ const STORAGE_KEYS = {
   favorites: "ridescope-favorites",
   goals: "ridescope-goals",
   theme: "ridescope-theme",
-  palette: "ridescope-palette"
+  palette: "ridescope-palette",
+  font: "ridescope-font"
 };
 
 const defaultGoals: GoalValues = { distanceKm: 500, rides: 30, elevationM: 5000 };
@@ -298,9 +338,19 @@ function readPalette(): Palette {
   }
 }
 
-function applyTheme(theme: Theme, palette: Palette): void {
+function readFont(): FontFace {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.font);
+    return FONTS.some(font => font.id === saved) ? saved as FontFace : "google-sans";
+  } catch {
+    return "google-sans";
+  }
+}
+
+function applyTheme(theme: Theme, palette: Palette, font: FontFace = state.font): void {
   document.documentElement.dataset.theme = theme;
   document.documentElement.dataset.palette = palette;
+  document.documentElement.dataset.font = font;
   const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
   if (themeColor) themeColor.content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || (theme === "dark" ? "#111820" : "#f6f3f0");
 }
@@ -347,6 +397,7 @@ const state: AppState = {
   goals: readStoredGoals(),
   theme: readTheme(),
   palette: readPalette(),
+  font: readFont(),
   menuOpen: false,
   toast: null
 };
@@ -644,12 +695,14 @@ function renderRail(): string {
 function renderTopbar(): string {
   const meta = PAGE_META[state.page];
   const nextTheme = state.theme === "light" ? "dark" : "light";
+  const currentFont = FONTS.find(font => font.id === state.font) ?? FONTS[0];
   return `<header class="topbar">
     <button class="icon-button mobile-menu" data-action="menu" aria-label="Open navigation">${icon("menu", 20)}</button>
     <div class="topbar-title"><div class="breadcrumb"><span>Workspace</span>${icon("chevron", 12)}<span>${escapeHtml(meta.label)}</span></div><h1>${escapeHtml(meta.title)}</h1></div>
     <div class="topbar-actions">
       ${state.page !== "ride-analysis" && state.dataset && state.dataset.years.length ? `<div class="scope-toggle" role="group" aria-label="Data scope"><button class="${state.scope === "year" ? "is-active" : ""}" data-scope="year">Year</button><button class="${state.scope === "all" ? "is-active" : ""}" data-scope="all">All time</button></div>${scopeYearOptions()}` : ""}
       ${state.dataset ? `<button class="button button--sync ${state.syncing ? "is-syncing" : ""}" data-action="sync" ${state.syncing ? "disabled" : ""}>${icon("sync", 15)}<span>${state.syncing ? "Syncing" : "Sync"}</span></button>` : ""}
+      <details class="font-picker"><summary class="font-trigger" aria-label="Choose font face" title="Choose font face"><span class="font-trigger-glyph" aria-hidden="true">Aa</span><span>${escapeHtml(currentFont.label)}</span></summary><div class="font-options" role="group" aria-label="Font face">${FONTS.map(font => `<button class="font-option ${state.font === font.id ? "is-selected" : ""}" data-action="set-font" data-font="${font.id}" aria-pressed="${state.font === font.id}" style="font-family:${escapeHtml(font.previewFamily)}"><span class="font-option-sample" aria-hidden="true">Aa</span><span class="font-option-meta"><strong>${escapeHtml(font.label)}</strong><small>${escapeHtml(font.style)}</small></span></button>`).join("")}</div></details>
       <details class="palette-picker"><summary class="palette-trigger" aria-label="Choose color palette" title="Choose color palette"><span class="palette-trigger-swatches" aria-hidden="true"><i></i><i></i><i></i></span><span>Palette</span></summary><div class="palette-options" role="group" aria-label="Color palette">${PALETTES.map(palette => `<button class="palette-option ${state.palette === palette.id ? "is-selected" : ""}" data-action="set-palette" data-palette="${palette.id}" aria-pressed="${state.palette === palette.id}"><span class="palette-option-swatches" aria-hidden="true" style="--swatch-one:${palette.colors[0]};--swatch-two:${palette.colors[1]};--swatch-three:${palette.colors[2]}"><i></i><i></i><i></i></span><span>${palette.label}</span></button>`).join("")}</div></details>
       <button class="icon-button theme-toggle" data-action="toggle-theme" aria-label="Switch to ${nextTheme} theme" title="Switch to ${nextTheme} theme">${icon(nextTheme === "dark" ? "moon" : "sun", 17)}</button>
       <div class="topbar-avatar" aria-label="RideScope">RS</div>
@@ -914,7 +967,7 @@ function rideDetailView(): string {
   return `<div class="page-stack">
     ${pageHeader(`${fmt.n(rides.length)} ride${rides.length === 1 ? "" : "s"} · ${fmt.hours(totalHours)}`, fmt.date(date), "Every activity and recorded metric for this date.", `<button class="button button--secondary" data-page-target="calendar">${icon("arrow", 15)} Back to calendar</button>`)}
     <section class="kpi-grid kpi-grid--three reveal reveal--delay-1">${kpiCard("Distance", fmt.km(totalDistance), "combined for this day", "overview", "cyan")}${kpiCard("Elevation", fmt.m(totalElevation), "combined climbing", "elevation", "violet")}${kpiCard("Moving time", fmt.hours(totalHours), `${fmt.n(rides.length)} activities`, "clock", "orange")}</section>
-    <section class="ride-detail-list reveal reveal--delay-2">${rides.map((ride, index) => `<article class="panel ride-detail-card"><div class="ride-detail-heading"><span class="ride-detail-index">${String(index + 1).padStart(2, "0")}</span><div><div class="eyebrow">${escapeHtml(ride.startTime ?? "Ride")}</div><h2>${escapeHtml(ride.bike)}</h2></div><button class="icon-button icon-button--star ${isFavorite(ride) ? "is-starred" : ""}" data-favorite="${ride.id}" aria-label="Toggle favorite">${icon("star", 16)}</button></div><div class="ride-detail-metrics"><div><span>Distance</span><strong>${fmt.km(ride.distance)}</strong></div><div><span>Moving time</span><strong>${rideDurationHours(ride) === null ? "—" : fmt.hours(rideDurationHours(ride))}</strong></div><div><span>Elapsed time</span><strong>${escapeHtml(ride.elapsedTime || "—")}</strong></div><div><span>Elevation gain</span><strong>${fmt.m(ride.elevation)}</strong></div><div><span>Average speed</span><strong>${fmt.speed(ride.avgSpeed)}</strong></div><div><span>Maximum speed</span><strong>${fmt.speed(ride.maxSpeed)}</strong></div><div><span>Average heart rate</span><strong>${ride.hrMean === null ? "—" : `${ride.hrMean.toFixed(0)} bpm`}</strong></div><div><span>Maximum heart rate</span><strong>${ride.hrMax === null ? "—" : `${ride.hrMax.toFixed(0)} bpm`}</strong></div><div><span>Device</span><strong>${escapeHtml(ride.device ?? "Not recorded")}</strong></div></div></article>`).join("")}</section>
+    <section class="ride-detail-list reveal reveal--delay-2">${rides.map((ride, index) => `<article class="panel ride-detail-card"><div class="ride-detail-heading"><span class="ride-detail-index">${String(index + 1).padStart(2, "0")}</span><div><div class="eyebrow">${escapeHtml(ride.startTime ?? "Ride")}</div><h2>${escapeHtml(ride.bike)}</h2></div><button class="icon-button icon-button--star ${isFavorite(ride) ? "is-starred" : ""}" data-favorite="${ride.id}" aria-label="Toggle favorite">${icon("star", 16)}</button></div><div class="ride-detail-metrics"><div><span>Distance</span><strong>${fmt.km(ride.distance)}</strong></div><div><span>Moving time</span><strong>${rideDurationHours(ride) === null ? "—" : fmt.hours(rideDurationHours(ride))}</strong></div><div><span>Elapsed time</span><strong>${escapeHtml(ride.elapsedTime || "—")}</strong></div><div><span>Elevation gain</span><strong>${fmt.m(ride.elevation)}</strong></div><div><span>Average speed</span><strong>${fmt.speed(ride.avgSpeed)}</strong></div><div><span>Maximum speed</span><strong>${fmt.speed(ride.maxSpeed)}</strong></div><div><span>Average heart rate</span><strong>${ride.hrMean === null ? "—" : `${ride.hrMean.toFixed(0)} bpm`}</strong></div><div><span>Maximum heart rate</span><strong>${ride.hrMax === null ? "—" : `${ride.hrMax.toFixed(0)} bpm`}</strong></div><div><span>Device</span><strong>${escapeHtml(ride.device ?? "Not recorded")}</strong></div></div>${ride.componentRideCount ? `<div class="drawer-note"><span>${icon("info", 15)}</span><p>Includes ${fmt.n(ride.componentRideCount)} Samsung Health sections from this outing. Their summaries are hidden to prevent double-counting; GPS remains available in private ride analysis.</p></div>` : ""}</article>`).join("")}</section>
   </div>`;
 }
 
@@ -1454,6 +1507,10 @@ function setScope(scope: Scope): void {
 
 function handleClick(event: MouseEvent): void {
   const target = event.target as HTMLElement;
+  const activePicker = target.closest<HTMLDetailsElement>(".palette-picker, .font-picker");
+  document.querySelectorAll<HTMLDetailsElement>(".palette-picker[open], .font-picker[open]").forEach(picker => {
+    if (picker !== activePicker) picker.open = false;
+  });
   const nav = target.closest<HTMLElement>("[data-nav]");
   if (nav?.dataset.nav) {
     setPage(nav.dataset.nav as Page);
@@ -1508,7 +1565,7 @@ function handleClick(event: MouseEvent): void {
     mountShell();
   } else if (action === "toggle-theme") {
     state.theme = state.theme === "light" ? "dark" : "light";
-    applyTheme(state.theme, state.palette);
+    applyTheme(state.theme, state.palette, state.font);
     try {
       localStorage.setItem(STORAGE_KEYS.theme, state.theme);
     } catch {
@@ -1519,11 +1576,23 @@ function handleClick(event: MouseEvent): void {
     const palette = target.closest<HTMLElement>("[data-palette]")?.dataset.palette;
     if (PALETTES.some(option => option.id === palette)) {
       state.palette = palette as Palette;
-      applyTheme(state.theme, state.palette);
+      applyTheme(state.theme, state.palette, state.font);
       try {
         localStorage.setItem(STORAGE_KEYS.palette, state.palette);
       } catch {
         // The palette still applies for this page when browser storage is unavailable.
+      }
+      mountShell();
+    }
+  } else if (action === "set-font") {
+    const font = target.closest<HTMLElement>("[data-font]")?.dataset.font;
+    if (FONTS.some(option => option.id === font)) {
+      state.font = font as FontFace;
+      applyTheme(state.theme, state.palette, state.font);
+      try {
+        localStorage.setItem(STORAGE_KEYS.font, state.font);
+      } catch {
+        // The font still applies for this page when browser storage is unavailable.
       }
       mountShell();
     }
@@ -1562,6 +1631,11 @@ function handleClick(event: MouseEvent): void {
 function handleKeydown(event: KeyboardEvent): void {
   const target = event.target as HTMLElement;
   if (event.key === "Escape") {
+    const openPickers = document.querySelectorAll<HTMLDetailsElement>(".palette-picker[open], .font-picker[open]");
+    if (openPickers.length) {
+      openPickers.forEach(picker => { picker.open = false; });
+      return;
+    }
     if (state.page === "ride-analysis") {
       state.rideAnalysis = null;
       state.rideAnalysisError = null;

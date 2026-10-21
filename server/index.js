@@ -143,6 +143,158 @@ function durationText(seconds) {
   return `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
 }
 
+function durationSeconds(value) {
+  const parts = String(value ?? "").trim().split(":").map(Number);
+  if (parts.length === 3 && parts.every(Number.isFinite)) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+  if (parts.length === 2 && parts.every(Number.isFinite)) {
+    return parts[0] * 60 + parts[1];
+  }
+  return null;
+}
+
+function secondsOfDay(value) {
+  const match = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/.exec(String(value ?? ""));
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3] ?? 0);
+  if (hours > 23 || minutes > 59 || seconds > 59) return null;
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+/**
+ * A date-only Strava/custom-activity row can describe one whole outing while
+ * Samsung Health contains the same outing as two or more recorded sections.
+ * Keep the whole-ride summary and suppress those component summaries from
+ * public statistics when both their elapsed span and combined distance agree.
+ */
+function findCompositeRideParts(rides) {
+  const byDate = new Map();
+  rides.forEach(ride => {
+    const date = String(ride.ride_date).slice(0, 10);
+    const group = byDate.get(date) ?? [];
+    group.push(ride);
+    byDate.set(date, group);
+  });
+
+  const selected = [];
+  byDate.forEach(dayRides => {
+    const parents = dayRides.filter(ride =>
+      ride.source_system !== "samsung_health"
+      && ride.start_time === null
+      && Number(ride.distance) >= 20
+      && durationSeconds(ride.elapsed_time) >= 60 * 60
+    );
+    const sessions = dayRides.filter(ride =>
+      ride.source_system === "samsung_health"
+      && ride.source_app_id === SAMSUNG_HEALTH_SOURCE_APP_ID
+      && ride.auto_detected !== true
+      && ride.start_time !== null
+      && Number(ride.distance) > MIN_RIDE_DISTANCE_KM
+      && durationSeconds(ride.elapsed_time) > 0
+      && secondsOfDay(ride.start_time) !== null
+    ).map(ride => ({
+      ride,
+      start: secondsOfDay(ride.start_time),
+      duration: durationSeconds(ride.elapsed_time),
+      distance: Number(ride.distance)
+    })).sort((a, b) => a.start - b.start);
+
+    for (const parent of parents) {
+      const expectedDuration = durationSeconds(parent.elapsed_time);
+      const expectedDistance = Number(parent.distance);
+      const toleranceSeconds = Math.max(15 * 60, expectedDuration * 0.08);
+      const matches = [];
+
+      for (let startIndex = 0; startIndex < sessions.length; startIndex += 1) {
+        let totalDistance = 0;
+        let lastEnd = null;
+        for (let endIndex = startIndex; endIndex < sessions.length; endIndex += 1) {
+          const session = sessions[endIndex];
+          const gap = lastEnd === null ? 0 : session.start - lastEnd;
+          if (gap > 90 * 60 || gap < -120) break;
+          totalDistance += session.distance;
+          lastEnd = Math.max(lastEnd ?? 0, session.start + session.duration);
+          const count = endIndex - startIndex + 1;
+          if (count < 2) continue;
+
+          const span = lastEnd - sessions[startIndex].start;
+          const distanceRatio = totalDistance / expectedDistance;
+          const elapsedDifference = Math.abs(span - expectedDuration);
+          if (distanceRatio < 0.8 || distanceRatio > 1.2 || elapsedDifference > toleranceSeconds) continue;
+          matches.push({
+            parentId: String(parent.id),
+            componentIds: sessions.slice(startIndex, endIndex + 1).map(item => String(item.ride.id)),
+            score: elapsedDifference / toleranceSeconds + Math.abs(1 - distanceRatio) / 0.2
+          });
+        }
+      }
+
+      matches.sort((a, b) => a.score - b.score);
+      if (matches.length && (!matches[1] || matches[1].score - matches[0].score >= 0.15)) {
+        selected.push(matches[0]);
+      }
+    }
+  });
+
+  const parentByComponent = new Map();
+  selected.forEach(match => match.componentIds.forEach(id => {
+    const owners = parentByComponent.get(id) ?? new Set();
+    owners.add(match.parentId);
+    parentByComponent.set(id, owners);
+  }));
+
+  const componentsByParent = new Map();
+  selected.forEach(match => {
+    if (!match.componentIds.every(id => parentByComponent.get(id)?.size === 1)) return;
+    componentsByParent.set(match.parentId, match.componentIds);
+  });
+  return componentsByParent;
+}
+
+async function getPublicRideRows() {
+  await ensureSamsungRouteLinks();
+  return sql`
+    SELECT
+      ride.id,
+      ride.ride_date,
+      ride.start_time,
+      ride.elapsed_time,
+      ride.moving_time,
+      ride.distance,
+      ride.elevation,
+      ride.avg_speed,
+      ride.max_speed,
+      ride.device,
+      ride.hr_max,
+      ride.hr_mean,
+      ride.bike,
+      ride.duration_seconds,
+      ride.calories_kcal,
+      ride.source_system,
+      ride.source_app_id,
+      ride.auto_detected,
+      ride.activity_type,
+      ride.title
+    FROM rides AS ride
+    WHERE ride.auto_detected IS NOT TRUE
+      AND ride.distance > ${MIN_RIDE_DISTANCE_KM}
+      AND (ride.source_system <> 'samsung_health' OR ride.source_app_id = ${SAMSUNG_HEALTH_SOURCE_APP_ID})
+      AND NOT (
+        ride.source_system = 'samsung_health'
+        AND EXISTS (
+          SELECT 1
+          FROM samsung_route_links AS route_link
+          WHERE route_link.source_record_id = ride.source_record_id
+            AND route_link.ride_id <> ride.id
+        )
+      )
+    ORDER BY ride.id ASC
+  `;
+}
+
 function normalizeSamsungSync(body) {
   if (!body || body.schemaVersion !== 1 || !Array.isArray(body.rides)) {
     throw new TypeError("Expected schemaVersion 1 and a rides array.");
@@ -373,48 +525,16 @@ app.get("/api/rides", async (_req, res) => {
   }
 
   try {
-    await ensureSamsungRouteLinks();
-    const rides = await sql`
-      SELECT
-        CASE
-          WHEN start_time IS NULL THEN to_char(ride_date, 'YYYY-MM-DD')
-          ELSE to_char(ride_date, 'YYYY-MM-DD') || ' ' || to_char(start_time, 'HH24:MI:SS')
-        END AS activity_date,
-        id AS database_id,
-        elapsed_time,
-        moving_time,
-        distance,
-        elevation,
-        avg_speed,
-        max_speed,
-        device,
-        hr_max,
-        hr_mean,
-        bike,
-        duration_seconds,
-        calories_kcal,
-        source_system,
-        activity_type,
-        title
-      FROM rides AS ride
-      WHERE ride.auto_detected IS NOT TRUE
-        AND ride.distance > ${MIN_RIDE_DISTANCE_KM}
-        AND (ride.source_system <> 'samsung_health' OR ride.source_app_id = ${SAMSUNG_HEALTH_SOURCE_APP_ID})
-        AND NOT (
-        ride.source_system = 'samsung_health'
-        AND EXISTS (
-          SELECT 1
-          FROM samsung_route_links AS route_link
-          WHERE route_link.source_record_id = ride.source_record_id
-            AND route_link.ride_id <> ride.id
-        )
-      )
-      ORDER BY ride.id ASC
-    `;
+    const allRides = await getPublicRideRows();
+    const componentsByParent = findCompositeRideParts(allRides);
+    const hiddenComponentIds = new Set([...componentsByParent.values()].flat());
+    const rides = allRides.filter(ride => !hiddenComponentIds.has(String(ride.id)));
 
     return res.json({
       values: [RIDE_HEADERS, ...rides.map(ride => asRow([
-        ride.activity_date,
+        ride.start_time === null
+          ? String(ride.ride_date).slice(0, 10)
+          : `${String(ride.ride_date).slice(0, 10)} ${String(ride.start_time).slice(0, 8)}`,
         ride.elapsed_time,
         ride.moving_time,
         ride.distance,
@@ -427,7 +547,13 @@ app.get("/api/rides", async (_req, res) => {
         ride.bike
       ]))],
       rides: rides.map(ride => ({
-        databaseId: String(ride.database_id)
+        databaseId: String(ride.id),
+        durationSeconds: ride.duration_seconds,
+        caloriesKcal: ride.calories_kcal,
+        sourceSystem: ride.source_system,
+        activityType: ride.activity_type,
+        title: ride.title,
+        componentRideCount: componentsByParent.get(String(ride.id))?.length ?? 0
       })),
       syncedAt: new Date().toISOString()
     });
@@ -471,13 +597,32 @@ app.get("/api/rides/:rideId/analysis", async (req, res) => {
 
   try {
     const rideId = req.params.rideId;
-    await ensureSamsungRouteLinks();
-    const [ride] = await sql`SELECT id, duration_seconds, calories_kcal, source_system, activity_type, title FROM rides WHERE id = ${rideId} AND auto_detected IS NOT TRUE AND distance > ${MIN_RIDE_DISTANCE_KM} AND (source_system <> 'samsung_health' OR source_app_id = ${SAMSUNG_HEALTH_SOURCE_APP_ID})`;
-    if (!ride) return res.status(404).json({ ok: false, error: "Ride not found." });
+    const allRides = await getPublicRideRows();
+    const componentsByParent = findCompositeRideParts(allRides);
+    const hiddenComponentIds = new Set([...componentsByParent.values()].flat());
+    const ride = allRides.find(item => String(item.id) === String(rideId));
+    if (!ride || hiddenComponentIds.has(String(ride.id))) {
+      return res.status(404).json({ ok: false, error: "Ride not found." });
+    }
+    const componentIds = componentsByParent.get(String(ride.id)) ?? [];
+    const [parentRouteCount] = await sql`
+      SELECT count(*)::int AS point_count
+      FROM ride_route_points
+      WHERE ride_id = ${rideId}
+    `;
+    const routeRideIds = Number(parentRouteCount.point_count) > 0
+      ? [String(ride.id)]
+      : [String(ride.id), ...componentIds];
+    const routeRideIdsJson = JSON.stringify(routeRideIds);
     const [routePoints, exerciseSamples] = await Promise.all([
       sql`
+        WITH requested_rides AS (
+          SELECT value::bigint AS ride_id
+          FROM jsonb_array_elements_text(${routeRideIdsJson}::jsonb)
+        )
         SELECT route.recorded_at, route.latitude, route.longitude, route.altitude_meters
         FROM ride_route_points AS route
+        JOIN requested_rides AS requested ON requested.ride_id = route.ride_id
         LEFT JOIN samsung_route_links AS route_link
           ON route_link.ride_id = route.ride_id
          AND route_link.source_record_id = route.source_record_id
@@ -485,9 +630,9 @@ app.get("/api/rides/:rideId/analysis", async (req, res) => {
           ON source_ride.source_system = 'samsung_health'
          AND source_ride.source_record_id = route.source_record_id
         LEFT JOIN rides AS owner_ride ON owner_ride.id = route.ride_id
-        WHERE route.ride_id = ${rideId}
+        WHERE route.ride_id IN (SELECT ride_id FROM requested_rides)
           AND coalesce(route_link.source_app_id, source_ride.source_app_id, owner_ride.source_app_id) = ${SAMSUNG_HEALTH_SOURCE_APP_ID}
-        ORDER BY route.sequence ASC
+        ORDER BY route.recorded_at ASC, route.ride_id ASC, route.sequence ASC
       `,
       sql`
         SELECT sample.recorded_at, sample.heart_rate_bpm, sample.cadence_rpm, sample.power_watts, sample.speed_meters_per_second
@@ -509,7 +654,8 @@ app.get("/api/rides/:rideId/analysis", async (req, res) => {
         caloriesKcal: ride.calories_kcal,
         sourceSystem: ride.source_system,
         activityType: ride.activity_type,
-        title: ride.title
+        title: ride.title,
+        componentRideCount: componentIds.length
       },
       routePoints: routePoints.map(point => ({
         timestamp: point.recorded_at,
@@ -543,28 +689,14 @@ app.get("/api/health", async (_req, res) => {
   }
 
   try {
-    await ensureSamsungRouteLinks();
-    const [result] = await sql`
-      SELECT count(*)::int AS ride_count
-      FROM rides AS ride
-      WHERE ride.auto_detected IS NOT TRUE
-        AND ride.distance > ${MIN_RIDE_DISTANCE_KM}
-        AND (ride.source_system <> 'samsung_health' OR ride.source_app_id = ${SAMSUNG_HEALTH_SOURCE_APP_ID})
-        AND NOT (
-        ride.source_system = 'samsung_health'
-        AND EXISTS (
-          SELECT 1
-          FROM samsung_route_links AS route_link
-          WHERE route_link.source_record_id = ride.source_record_id
-            AND route_link.ride_id <> ride.id
-        )
-      )
-    `;
+    const rides = await getPublicRideRows();
+    const componentsByParent = findCompositeRideParts(rides);
+    const hiddenComponentCount = [...componentsByParent.values()].reduce((total, ids) => total + ids.length, 0);
     return res.json({
       ok: true,
       databaseConfigured: true,
       databaseReady: true,
-      rideCount: result.ride_count,
+      rideCount: rides.length - hiddenComponentCount,
       missingSettings: []
     });
   } catch (error) {

@@ -140,6 +140,7 @@ export type RideMetadata = {
   sourceSystem?: string | null;
   activityType?: string | null;
   title?: string | null;
+  componentRideCount?: number | string | null;
 };
 
 export function normalizeRows(rows: string[][], metadata: RideMetadata[] = []): Ride[] {
@@ -161,6 +162,7 @@ export function normalizeRows(rows: string[][], metadata: RideMetadata[] = []): 
       sourceSystem: metadata[index]?.sourceSystem ?? null,
       activityType: metadata[index]?.activityType ?? null,
       title: metadata[index]?.title ?? null,
+      componentRideCount: Number(metadata[index]?.componentRideCount) || 0,
       date: normalizedDate,
       startTime: parsed.time,
       elapsedTime: String(row[1] ?? ""),

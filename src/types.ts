@@ -9,6 +9,8 @@ export type Ride = {
   sourceSystem: string | null;
   activityType: string | null;
   title: string | null;
+  /** Samsung Health sections hidden as duplicate summaries of this full outing. */
+  componentRideCount: number;
   /** ISO calendar date, normalized from the database record. */
   date: string;
   /** Optional local clock time when the source row contains one. */

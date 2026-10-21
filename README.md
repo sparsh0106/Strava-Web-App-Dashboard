@@ -67,7 +67,7 @@ Samsung requires app verification before public distribution; see its [verificat
 - Bike, consistency, goal, performance, terrain, time-of-day, and heart-rate views.
 - Search, sorting, filters, favorites, ride details, and CSV export.
 - Individual ride analysis with measured workout charts, an exact private route map, and route elevation profile.
-- Light and dark themes, six accent palettes, and personal goals saved in the browser.
+- Light and dark themes, twelve accent palettes, eight selectable font faces, and personal goals saved in the browser.
 - Responsive layouts, keyboard-friendly controls, and reduced-motion support.
 
 Some analytics need complete source data. For example, hour-of-day charts need a real start time; date-only rides stay date-only rather than receiving an invented time.

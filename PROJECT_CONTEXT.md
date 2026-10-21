@@ -41,7 +41,7 @@ Dates are parsed as local calendar components to avoid UTC day shifts. Blank opt
 
 ## Visual and interaction direction
 
-Google Sans is used throughout. The app has light and dark themes and six accent palettes (Ember, Ocean, Forest, Lavender, Rose, Citrus). Theme, palette, favorites, and personal goals are stored in browser `localStorage`. Layouts reflow for phones, preserve keyboard focus states, and respect reduced-motion settings.
+Google Sans is the default typeface, with eight selectable font faces (Google Sans, Inter, Plus Jakarta, Space Grotesk, Outfit, DM Sans, Fraunces editorial serif, and JetBrains Mono). The app has light and dark themes and twelve accent palettes (Ember, Ocean, Forest, Lavender, Rose, Citrus, Cobalt, Sunset, Emerald, Crimson, Aurora, and Slate). Theme, palette, font face, favorites, and personal goals are stored in browser `localStorage`. Layouts reflow for phones, preserve keyboard focus states, and respect reduced-motion settings.
 
 ## Privacy and configuration
 

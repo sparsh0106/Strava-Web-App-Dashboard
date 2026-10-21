@@ -10,14 +10,18 @@
         try {
           const theme = localStorage.getItem("ridescope-theme");
           if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+          const palette = localStorage.getItem("ridescope-palette");
+          if (palette) document.documentElement.dataset.palette = palette;
+          const font = localStorage.getItem("ridescope-font");
+          if (font) document.documentElement.dataset.font = font;
         } catch {
-          // Keep the default light theme when browser storage is unavailable.
+          // Keep defaults when browser storage is unavailable.
         }
       })();
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700;9..144,800&family=Google+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <title>RideScope · Personal Cycling Intelligence</title>
   </head>
   <body>
